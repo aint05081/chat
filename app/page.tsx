@@ -195,8 +195,14 @@ export default function Home() {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "messages" },
         async () => {
-          await loadMessages(false);
           await loadAllMessagesForBadges();
+
+isNearBottomRef.current = true;
+setShowScrollButton(false);
+
+setTimeout(() => {
+  scrollToBottom();
+}, 50);
         }
       )
       .subscribe();
@@ -336,6 +342,16 @@ export default function Home() {
   }
 
   function scrollAfterMessagesLoaded(loadedMessages: Message[]) {
+    const roomUnreadCount = getUnreadCount(
+  selectedRoom === "group"
+    ? "group"
+    : selectedRoom
+);
+
+if (roomUnreadCount === 0) {
+  scrollToBottom();
+  return;
+}
     if (!me) {
       setTimeout(scrollToBottom, 120);
       return;
@@ -347,7 +363,14 @@ export default function Home() {
     });
 
     setTimeout(() => {
-      if (firstUnread) {
+      if (
+  firstUnread &&
+  getUnreadCount(
+    selectedRoom === "group"
+      ? "group"
+      : selectedRoom
+  ) > 0
+) {
         const el = document.getElementById(`message-${firstUnread.id}`);
 
         if (el) {
