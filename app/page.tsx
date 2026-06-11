@@ -101,6 +101,8 @@ export default function Home() {
 
   const isAdmin = me?.role === "admin";
 
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+
   const activeUsers = useMemo(
     () => users.filter((u) => u.is_active !== false),
     [users]
@@ -336,58 +338,47 @@ setTimeout(() => {
   }
 
   function scrollToBottom() {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  const el = chatScrollRef.current;
+
+  if (!el) return;
+
+  requestAnimationFrame(() => {
+    el.scrollTop = el.scrollHeight;
     isNearBottomRef.current = true;
     setShowScrollButton(false);
-  }
+  });
+}
 
   function scrollAfterMessagesLoaded(loadedMessages: Message[]) {
-    const roomUnreadCount = getUnreadCount(
-  selectedRoom === "group"
-    ? "group"
-    : selectedRoom
-);
+  if (!me) {
+    setTimeout(scrollToBottom, 150);
+    return;
+  }
 
-if (roomUnreadCount === 0) {
-  scrollToBottom();
-  return;
-}
-    if (!me) {
-      setTimeout(scrollToBottom, 120);
-      return;
+  const firstUnread = loadedMessages.find((m) => {
+    const readBy = m.read_by ?? [];
+    return m.user_id !== me.id && !readBy.includes(me.id);
+  });
+
+  setTimeout(() => {
+    if (firstUnread) {
+      const el = document.getElementById(`message-${firstUnread.id}`);
+
+      if (el) {
+        el.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+
+        isNearBottomRef.current = false;
+        setShowScrollButton(true);
+        return;
+      }
     }
 
-    const firstUnread = loadedMessages.find((m) => {
-      const readBy = m.read_by ?? [];
-      return m.user_id !== me.id && !readBy.includes(me.id);
-    });
-
-    setTimeout(() => {
-      if (
-  firstUnread &&
-  getUnreadCount(
-    selectedRoom === "group"
-      ? "group"
-      : selectedRoom
-  ) > 0
-) {
-        const el = document.getElementById(`message-${firstUnread.id}`);
-
-        if (el) {
-          el.scrollIntoView({
-            behavior: "smooth",
-            block: "center",
-          });
-
-          isNearBottomRef.current = false;
-          setShowScrollButton(true);
-          return;
-        }
-      }
-
-      scrollToBottom();
-    }, 150);
-  }
+    scrollToBottom();
+  }, 200);
+}
 
   function handleChatScroll(e: React.UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
@@ -500,8 +491,20 @@ if (roomUnreadCount === 0) {
         .eq("id", message.id);
     }
 
-    await loadMessages(false);
     await loadAllMessagesForBadges();
+
+setMessages((prev) =>
+  prev.map((m) => ({
+    ...m,
+    read_by: Array.from(new Set([...(m.read_by ?? []), me.id])),
+  }))
+);
+
+setShowScrollButton(false);
+
+setTimeout(() => {
+  scrollToBottom();
+}, 200);
   }
 
   async function login() {
