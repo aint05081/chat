@@ -48,16 +48,20 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [content, setContent] = useState("");
 
-  const [opacity, setOpacity] = useState(95);
+  const [opacity, setOpacity] = useState(100);
   const [adminOpen, setAdminOpen] = useState(false);
   const [bossMode, setBossMode] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newName, setNewName] = useState("");
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const isNearBottomRef = useRef(true);
+
   const isAdmin = me?.role === "admin";
 
   const activeUsers = useMemo(
@@ -93,10 +97,16 @@ export default function Home() {
           await loadMessages();
 
           const newMessage = payload.new as Message;
+          const isMine = me && newMessage.user_id === me.id;
 
-          if (me && newMessage.user_id !== me.id) {
-            setShowScrollButton(true);
+          if (!isMine) {
             showNotification(newMessage);
+          }
+
+          if (isNearBottomRef.current || isMine) {
+            setTimeout(scrollToBottom, 50);
+          } else {
+            setShowScrollButton(true);
           }
         }
       )
@@ -123,7 +133,7 @@ export default function Home() {
       supabase.removeChannel(messagesChannel);
       supabase.removeChannel(usersChannel);
     };
-  }, [me?.id, users]);
+  }, [me?.id]);
 
   useEffect(() => {
     if (!me?.id) return;
@@ -166,6 +176,10 @@ export default function Home() {
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "b") {
         setBossMode((v) => !v);
       }
+
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
+        setOpacity(100);
+      }
     };
 
     window.addEventListener("keydown", handleKey);
@@ -196,6 +210,7 @@ export default function Home() {
 
   function scrollToBottom() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    isNearBottomRef.current = true;
     setShowScrollButton(false);
   }
 
@@ -203,6 +218,7 @@ export default function Home() {
     const el = e.currentTarget;
     const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
 
+    isNearBottomRef.current = isNearBottom;
     setShowScrollButton(!isNearBottom);
   }
 
@@ -267,6 +283,8 @@ export default function Home() {
 
     setMe(data);
     localStorage.setItem("work-log-user", JSON.stringify(data));
+
+    setTimeout(scrollToBottom, 200);
   }
 
   function logout() {
@@ -281,11 +299,16 @@ export default function Home() {
     name: string;
   }) {
     if (!me) return;
+    if (sending) return;
     if (!content.trim() && !media) return;
+
+    setSending(true);
+
+    const messageContent = content.trim();
 
     const { error } = await supabase.from("messages").insert({
       user_id: me.id,
-      content: content.trim(),
+      content: messageContent,
       read_by: [me.id],
       media_url: media?.url ?? null,
       media_type: media?.type ?? null,
@@ -294,12 +317,17 @@ export default function Home() {
 
     if (error) {
       alert("메시지 전송 실패: " + error.message);
+      setSending(false);
       return;
     }
 
     setContent("");
     await loadMessages();
-    setTimeout(scrollToBottom, 50);
+
+    setTimeout(() => {
+      scrollToBottom();
+      setSending(false);
+    }, 50);
   }
 
   async function uploadChatMedia(file: File) {
@@ -532,7 +560,10 @@ export default function Home() {
             type="password"
             className="w-full border border-slate-200 rounded-xl px-4 py-3 mb-4 outline-none focus:ring-2 focus:ring-indigo-200"
             onKeyDown={(e) => {
-              if (e.key === "Enter") login();
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                login();
+              }
             }}
           />
 
@@ -588,40 +619,6 @@ export default function Home() {
               </p>
             </div>
           </div>
-
-          <div className="bg-white border border-indigo-100 rounded-2xl overflow-hidden shadow-sm">
-            <table className="w-full text-sm">
-              <thead className="bg-indigo-50 border-b border-indigo-100">
-                <tr>
-                  <th className="text-left p-4">담당자</th>
-                  <th className="text-left p-4">상태</th>
-                  <th className="text-left p-4">진행 상태</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeUsers.map((u) => (
-                  <tr key={u.id} className="border-b last:border-b-0">
-                    <td className="p-4 flex items-center gap-3">
-                      <img
-                        src={u.avatar_url || "/default-avatar.png"}
-                        alt=""
-                        className="w-9 h-9 rounded-full object-cover bg-slate-200"
-                      />
-                      {u.display_name}
-                    </td>
-                    <td className="p-4">
-                      {isActuallyOnline(u, onlineIds) ? "진행 중" : "대기"}
-                    </td>
-                    <td className="p-4">
-                      <span className="bg-indigo-50 text-indigo-700 rounded-full px-3 py-1">
-                        검수/수정 확인
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </div>
       </main>
     );
@@ -656,14 +653,14 @@ export default function Home() {
             </button>
 
             <div className="flex items-center gap-2 text-xs text-slate-500">
-              <span>투명도</span>
+              <span>투명도 {opacity}%</span>
               <input
                 type="range"
-                min="70"
+                min="0"
                 max="100"
                 value={opacity}
                 onChange={(e) => setOpacity(Number(e.target.value))}
-                className="w-20"
+                className="w-24"
               />
             </div>
 
@@ -841,6 +838,7 @@ export default function Home() {
           <div className="min-h-0 flex flex-col border-r border-indigo-100">
             <div className="relative flex-1 min-h-0">
               <div
+                ref={chatScrollRef}
                 onClick={markMessagesAsRead}
                 onScroll={handleChatScroll}
                 className="h-full overflow-y-auto p-6 space-y-5 bg-white"
@@ -938,7 +936,10 @@ export default function Home() {
                   onChange={(e) => setContent(e.target.value)}
                   onFocus={markMessagesAsRead}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") sendMessage();
+                    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
                   }}
                   placeholder="업무 내용을 입력하세요"
                   className="flex-1 px-4 py-3 outline-none text-sm"
@@ -946,7 +947,8 @@ export default function Home() {
 
                 <button
                   onClick={() => sendMessage()}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6 transition"
+                  disabled={sending}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl px-6 transition"
                 >
                   등록
                 </button>
@@ -994,6 +996,15 @@ export default function Home() {
           </aside>
         </section>
       </div>
+
+      {opacity === 0 && (
+        <button
+          onClick={() => setOpacity(100)}
+          className="fixed bottom-4 right-4 bg-indigo-600 text-white rounded-full px-4 py-2 shadow-xl z-[9999]"
+        >
+          투명도 복구
+        </button>
+      )}
     </main>
   );
 }
