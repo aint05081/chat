@@ -556,8 +556,8 @@ export default function Home() {
       return;
     }
 
-    const fileExt = newEmojiFile.name.split(".").pop();
-    const filePath = `${Date.now()}-${cleanName}.${fileExt}`;
+    const fileExt = newEmojiFile.name.split(".").pop()?.toLowerCase() || "png";
+    const filePath = `${crypto.randomUUID()}.${fileExt}`;
 
     const { error: uploadError } = await supabase.storage
       .from("custom-emojis")
