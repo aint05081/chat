@@ -22,6 +22,8 @@ type Message = {
   media_url?: string | null;
   media_type?: string | null;
   media_name?: string | null;
+  room_type?: "group" | "dm";
+  recipient_id?: number | null;
   users?: User;
 };
 
@@ -53,6 +55,8 @@ export default function Home() {
   const [bossMode, setBossMode] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [sending, setSending] = useState(false);
+  const [notificationOn, setNotificationOn] = useState(true);
+  const [selectedRoom, setSelectedRoom] = useState<"group" | number>("group");
 
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -85,7 +89,15 @@ export default function Home() {
     const savedOpacity = localStorage.getItem("work-log-opacity");
     if (savedOpacity) setOpacity(Number(savedOpacity));
 
+    const savedNotification = localStorage.getItem("work-log-notification-on");
+    if (savedNotification !== null) {
+      setNotificationOn(savedNotification === "true");
+    }
+
     loadUsers();
+  }, []);
+
+  useEffect(() => {
     loadMessages();
 
     const messagesChannel = supabase
@@ -99,9 +111,7 @@ export default function Home() {
           const newMessage = payload.new as Message;
           const isMine = me && newMessage.user_id === me.id;
 
-          if (!isMine) {
-            showNotification(newMessage);
-          }
+          if (!isMine) showNotification(newMessage);
 
           if (isNearBottomRef.current || isMine) {
             setTimeout(scrollToBottom, 50);
@@ -133,7 +143,7 @@ export default function Home() {
       supabase.removeChannel(messagesChannel);
       supabase.removeChannel(usersChannel);
     };
-  }, [me?.id]);
+  }, [me?.id, selectedRoom]);
 
   useEffect(() => {
     if (!me?.id) return;
@@ -172,6 +182,10 @@ export default function Home() {
   }, [opacity]);
 
   useEffect(() => {
+    localStorage.setItem("work-log-notification-on", String(notificationOn));
+  }, [notificationOn]);
+
+  useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "b") {
         setBossMode((v) => !v);
@@ -189,14 +203,30 @@ export default function Home() {
   async function requestNotificationPermission() {
     if (!("Notification" in window)) {
       alert("이 브라우저는 알림을 지원하지 않아.");
-      return;
+      return false;
     }
 
     const permission = await Notification.requestPermission();
-    if (permission === "granted") alert("알림이 켜졌어.");
+
+    if (permission === "granted") {
+      return true;
+    }
+
+    return false;
+  }
+
+  async function toggleNotification() {
+    if (notificationOn) {
+      setNotificationOn(false);
+      return;
+    }
+
+    const ok = await requestNotificationPermission();
+    if (ok) setNotificationOn(true);
   }
 
   function showNotification(message: Message) {
+    if (!notificationOn) return;
     if (!("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
 
@@ -232,12 +262,23 @@ export default function Home() {
   }
 
   async function loadMessages() {
-    const { data } = await supabase
+    let query = supabase
       .from("messages")
       .select("*, users(*)")
       .order("created_at", { ascending: true })
       .limit(300);
 
+    if (selectedRoom === "group") {
+      query = query.eq("room_type", "group");
+    } else if (me) {
+      query = query
+        .eq("room_type", "dm")
+        .or(
+          `and(user_id.eq.${me.id},recipient_id.eq.${selectedRoom}),and(user_id.eq.${selectedRoom},recipient_id.eq.${me.id})`
+        );
+    }
+
+    const { data } = await query;
     setMessages(data ?? []);
   }
 
@@ -313,6 +354,8 @@ export default function Home() {
       media_url: media?.url ?? null,
       media_type: media?.type ?? null,
       media_name: media?.name ?? null,
+      room_type: selectedRoom === "group" ? "group" : "dm",
+      recipient_id: selectedRoom === "group" ? null : selectedRoom,
     });
 
     if (error) {
@@ -633,10 +676,14 @@ export default function Home() {
         <header className="h-[76px] flex justify-between items-center px-6 border-b border-indigo-100 bg-gradient-to-r from-white to-indigo-50 shrink-0">
           <div>
             <h1 className="text-xl font-bold text-slate-900">
-              2026 Q3 마케팅 업무 로그
+              {selectedRoom === "group"
+                ? "2026 Q3 마케팅 업무 로그"
+                : `${userMap.get(selectedRoom)?.display_name ?? "개인"}님과의 개인 업무 로그`}
             </h1>
             <p className="text-sm text-slate-500">
-              광고 소재 / 검수 / 수정 요청 기록
+              {selectedRoom === "group"
+                ? "전체방 / 광고 소재 / 검수 / 수정 요청 기록"
+                : "개인 업무 대화"}
             </p>
           </div>
 
@@ -646,10 +693,14 @@ export default function Home() {
             </div>
 
             <button
-              onClick={requestNotificationPermission}
-              className="text-sm border border-indigo-100 bg-white hover:bg-indigo-50 rounded-xl px-3 py-2 transition"
+              onClick={toggleNotification}
+              className={`text-sm border rounded-xl px-3 py-2 transition ${
+                notificationOn
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-white hover:bg-indigo-50 border-indigo-100"
+              }`}
             >
-              알림
+              {notificationOn ? "알림 ON" : "알림 OFF"}
             </button>
 
             <div className="flex items-center gap-2 text-xs text-slate-500">
@@ -809,8 +860,8 @@ export default function Home() {
                       {u.is_active === false
                         ? "비활성"
                         : isActuallyOnline(u, onlineIds)
-                        ? "접속 중"
-                        : "오프라인"}
+                          ? "접속 중"
+                          : "오프라인"}
                     </p>
                   </div>
 
@@ -834,7 +885,7 @@ export default function Home() {
           </section>
         )}
 
-        <section className="flex-1 min-h-0 grid grid-cols-[1fr_240px]">
+        <section className="flex-1 min-h-0 grid grid-cols-[1fr_260px]">
           <div className="min-h-0 flex flex-col border-r border-indigo-100">
             <div className="relative flex-1 min-h-0">
               <div
@@ -941,7 +992,11 @@ export default function Home() {
                       sendMessage();
                     }
                   }}
-                  placeholder="업무 내용을 입력하세요"
+                  placeholder={
+                    selectedRoom === "group"
+                      ? "전체방에 보낼 업무 내용을 입력하세요"
+                      : "개인 메시지를 입력하세요"
+                  }
                   className="flex-1 px-4 py-3 outline-none text-sm"
                 />
 
@@ -957,6 +1012,53 @@ export default function Home() {
           </div>
 
           <aside className="min-h-0 bg-indigo-50/50 p-4 overflow-y-auto">
+            <h2 className="font-bold mb-3 text-sm text-slate-900">채팅방</h2>
+
+            <button
+              onClick={() => setSelectedRoom("group")}
+              className={`w-full mb-3 text-left rounded-2xl p-3 border transition ${
+                selectedRoom === "group"
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-white border-indigo-100 hover:bg-indigo-50"
+              }`}
+            >
+              전체방
+            </button>
+
+            <div className="space-y-2 mb-6">
+              {activeUsers
+                .filter((u) => u.id !== me.id)
+                .map((u) => (
+                  <button
+                    key={u.id}
+                    onClick={() => setSelectedRoom(u.id)}
+                    className={`w-full flex items-center gap-3 rounded-2xl p-3 border transition ${
+                      selectedRoom === u.id
+                        ? "bg-indigo-600 text-white border-indigo-600"
+                        : "bg-white border-indigo-100 hover:bg-indigo-50"
+                    }`}
+                  >
+                    <div className="relative">
+                      <img
+                        src={u.avatar_url || "/default-avatar.png"}
+                        alt=""
+                        className="w-8 h-8 rounded-full object-cover bg-slate-200"
+                      />
+                      <span
+                        className={`absolute right-0 bottom-0 w-2.5 h-2.5 rounded-full border-2 border-white ${
+                          isActuallyOnline(u, onlineIds)
+                            ? "bg-emerald-500"
+                            : "bg-slate-300"
+                        }`}
+                      />
+                    </div>
+                    <span className="text-sm font-medium truncate">
+                      {u.display_name}
+                    </span>
+                  </button>
+                ))}
+            </div>
+
             <h2 className="font-bold mb-4 text-sm text-slate-900">
               담당자 현황
             </h2>
