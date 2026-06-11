@@ -13,6 +13,21 @@ type User = {
   is_active?: boolean;
 };
 
+type CustomEmoji = {
+  id: number;
+  name: string;
+  image_url: string;
+  created_at?: string;
+};
+
+type MessageReaction = {
+  id: number;
+  message_id: number;
+  user_id: number;
+  emoji_name: string;
+  users?: User;
+};
+
 type Message = {
   id: number;
   user_id: number;
@@ -26,13 +41,6 @@ type Message = {
   recipient_id?: number | null;
   reply_to_id?: number | null;
   users?: User;
-};
-
-type CustomEmoji = {
-  id: number;
-  name: string;
-  image_url: string;
-  created_at?: string;
 };
 
 const PAGE_SIZE = 50;
@@ -50,11 +58,14 @@ function formatTime(dateString: string) {
   });
 }
 
-function renderTextWithLinks(text: string) {
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
+function renderTextWithLinksAndEmojis(
+  text: string,
+  customEmojis: CustomEmoji[]
+) {
+  const tokenRegex = /(https?:\/\/[^\s]+|:[a-zA-Z0-9_가-힣-]+:)/g;
 
-  return text.split(urlRegex).map((part, index) => {
-    if (part.match(urlRegex)) {
+  return text.split(tokenRegex).map((part, index) => {
+    if (part.match(/^https?:\/\/[^\s]+$/)) {
       return (
         <a
           key={index}
@@ -66,6 +77,22 @@ function renderTextWithLinks(text: string) {
           {part}
         </a>
       );
+    }
+
+    const emojiMatch = part.match(/^:([a-zA-Z0-9_가-힣-]+):$/);
+    if (emojiMatch) {
+      const emoji = customEmojis.find((e) => e.name === emojiMatch[1]);
+      if (emoji) {
+        return (
+          <img
+            key={index}
+            src={emoji.image_url}
+            alt={part}
+            title={part}
+            className="mx-1 inline-block h-7 w-7 rounded object-contain align-[-6px]"
+          />
+        );
+      }
     }
 
     return <span key={index}>{part}</span>;
@@ -80,6 +107,9 @@ export default function Home() {
     []
   );
   const [customEmojis, setCustomEmojis] = useState<CustomEmoji[]>([]);
+  const [messageReactions, setMessageReactions] = useState<MessageReaction[]>(
+    []
+  );
   const [onlineIds, setOnlineIds] = useState<number[]>([]);
 
   const [email, setEmail] = useState("");
@@ -103,8 +133,10 @@ export default function Home() {
   const [newPassword, setNewPassword] = useState("");
   const [newName, setNewName] = useState("");
 
-  const [emojiName, setEmojiName] = useState("");
-  const [emojiFile, setEmojiFile] = useState<File | null>(null);
+  const [newEmojiName, setNewEmojiName] = useState("");
+  const [newEmojiFile, setNewEmojiFile] = useState<File | null>(null);
+  const [emojiQuery, setEmojiQuery] = useState("");
+  const [showEmojiSuggest, setShowEmojiSuggest] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const firstUnreadRef = useRef<HTMLDivElement | null>(null);
@@ -132,22 +164,17 @@ export default function Home() {
     return new Map(messages.map((m) => [m.id, m]));
   }, [messages]);
 
-  const customEmojiMap = useMemo(() => {
-    return new Map(customEmojis.map((emoji) => [emoji.name, emoji]));
-  }, [customEmojis]);
+  const reactionsByMessageId = useMemo(() => {
+    const map = new Map<number, MessageReaction[]>();
 
-  const emojiQuery = useMemo(() => {
-    const match = content.match(/:([a-zA-Z0-9_\-가-힣]*)$/);
-    return match ? match[1] : null;
-  }, [content]);
+    for (const reaction of messageReactions) {
+      const current = map.get(reaction.message_id) ?? [];
+      current.push(reaction);
+      map.set(reaction.message_id, current);
+    }
 
-  const emojiSuggestions = useMemo(() => {
-    if (emojiQuery === null) return [];
-
-    return customEmojis
-      .filter((emoji) => emoji.name.includes(emojiQuery))
-      .slice(0, 8);
-  }, [customEmojis, emojiQuery]);
+    return map;
+  }, [messageReactions]);
 
   const currentRoomMemberCount =
     selectedRoom === "group" ? activeUsers.length : 2;
@@ -178,6 +205,7 @@ export default function Home() {
     loadUsers();
     loadAllMessagesForBadges();
     loadCustomEmojis();
+    loadMessageReactions();
   }, []);
 
   useEffect(() => {
@@ -185,25 +213,10 @@ export default function Home() {
   }, [notificationOn]);
 
   useEffect(() => {
-    loadCustomEmojis();
-
-    const customEmojiChannel = supabase
-      .channel("custom-emojis-channel")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "custom_emojis" },
-        () => loadCustomEmojis()
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(customEmojiChannel);
-    };
-  }, []);
-
-  useEffect(() => {
     loadMessages(false);
     loadAllMessagesForBadges();
+    loadCustomEmojis();
+    loadMessageReactions();
 
     const messagesChannel = supabase
       .channel("messages-channel")
@@ -253,6 +266,28 @@ export default function Home() {
       )
       .subscribe();
 
+    const reactionsChannel = supabase
+      .channel("message-reactions-channel")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "message_reactions" },
+        async () => {
+          await loadMessageReactions();
+        }
+      )
+      .subscribe();
+
+    const emojiChannel = supabase
+      .channel("custom-emojis-channel")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "custom_emojis" },
+        async () => {
+          await loadCustomEmojis();
+        }
+      )
+      .subscribe();
+
     const usersChannel = supabase
       .channel("users-channel")
       .on(
@@ -268,6 +303,8 @@ export default function Home() {
 
     return () => {
       supabase.removeChannel(messagesChannel);
+      supabase.removeChannel(reactionsChannel);
+      supabase.removeChannel(emojiChannel);
       supabase.removeChannel(usersChannel);
     };
   }, [me?.id, selectedRoom]);
@@ -497,30 +534,34 @@ export default function Home() {
     setCustomEmojis(data ?? []);
   }
 
-  function normalizeEmojiName(value: string) {
-    return value
-      .trim()
-      .replace(/^:+|:+$/g, "")
-      .replace(/\s+/g, "_")
-      .toLowerCase();
+  async function loadMessageReactions() {
+    const { data } = await supabase
+      .from("message_reactions")
+      .select("*, users(*)")
+      .order("created_at", { ascending: true });
+
+    setMessageReactions(data ?? []);
   }
 
   async function addCustomEmoji() {
     if (!isAdmin) return;
 
-    const normalizedName = normalizeEmojiName(emojiName);
+    const cleanName = newEmojiName
+      .trim()
+      .replaceAll(":", "")
+      .replace(/\s+/g, "_");
 
-    if (!normalizedName || !emojiFile) {
+    if (!cleanName || !newEmojiFile) {
       alert("이모티콘 이름과 이미지를 모두 넣어줘.");
       return;
     }
 
-    const fileExt = emojiFile.name.split(".").pop();
-    const filePath = `${normalizedName}-${Date.now()}.${fileExt}`;
+    const fileExt = newEmojiFile.name.split(".").pop();
+    const filePath = `${Date.now()}-${cleanName}.${fileExt}`;
 
     const { error: uploadError } = await supabase.storage
       .from("custom-emojis")
-      .upload(filePath, emojiFile, { upsert: true });
+      .upload(filePath, newEmojiFile, { upsert: true });
 
     if (uploadError) {
       alert("이모티콘 업로드 실패: " + uploadError.message);
@@ -531,18 +572,21 @@ export default function Home() {
       .from("custom-emojis")
       .getPublicUrl(filePath);
 
-    const { error: insertError } = await supabase.from("custom_emojis").insert({
-      name: normalizedName,
-      image_url: `${data.publicUrl}?t=${Date.now()}`,
-    });
+    const { error } = await supabase.from("custom_emojis").upsert(
+      {
+        name: cleanName,
+        image_url: `${data.publicUrl}?t=${Date.now()}`,
+      },
+      { onConflict: "name" }
+    );
 
-    if (insertError) {
-      alert("이모티콘 저장 실패: " + insertError.message);
+    if (error) {
+      alert("이모티콘 등록 실패: " + error.message);
       return;
     }
 
-    setEmojiName("");
-    setEmojiFile(null);
+    setNewEmojiName("");
+    setNewEmojiFile(null);
     await loadCustomEmojis();
   }
 
@@ -565,48 +609,111 @@ export default function Home() {
     await loadCustomEmojis();
   }
 
-  function insertCustomEmoji(name: string) {
-    setContent((prev) => prev.replace(/:([a-zA-Z0-9_\-가-힣]*)$/, `:${name}: `));
+  function insertEmoji(name: string) {
+    const token = `:${name}:`;
+
+    if (emojiQuery) {
+      setContent((prev) => prev.replace(new RegExp(`:${emojiQuery}$`), token));
+    } else {
+      setContent((prev) => `${prev}${token}`);
+    }
+
+    setEmojiQuery("");
+    setShowEmojiSuggest(false);
   }
 
-  function renderContentWithCustomEmojis(text: string) {
-    const tokenRegex = /(https?:\/\/[^\s]+|:[a-zA-Z0-9_\-가-힣]+:)/g;
+  async function toggleReaction(messageId: number, emojiName: string) {
+    if (!me) return;
 
-    return text.split(tokenRegex).map((part, index) => {
-      if (part.match(/^https?:\/\/[^\s]+$/)) {
-        return (
-          <a
-            key={index}
-            href={part}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline font-medium break-all"
-          >
-            {part}
-          </a>
-        );
-      }
+    const existing = messageReactions.find(
+      (r) =>
+        r.message_id === messageId &&
+        r.user_id === me.id &&
+        r.emoji_name === emojiName
+    );
 
-      const emojiMatch = part.match(/^:([a-zA-Z0-9_\-가-힣]+):$/);
+    if (existing) {
+      await supabase.from("message_reactions").delete().eq("id", existing.id);
+    } else {
+      await supabase.from("message_reactions").insert({
+        message_id: messageId,
+        user_id: me.id,
+        emoji_name: emojiName,
+      });
+    }
 
-      if (emojiMatch) {
-        const emoji = customEmojiMap.get(emojiMatch[1]);
+    await loadMessageReactions();
+  }
 
-        if (emoji) {
+  function renderReactions(messageId: number) {
+    const reactions = reactionsByMessageId.get(messageId) ?? [];
+    if (reactions.length === 0) return null;
+
+    const grouped = reactions.reduce<Record<string, MessageReaction[]>>(
+      (acc, reaction) => {
+        acc[reaction.emoji_name] = acc[reaction.emoji_name] ?? [];
+        acc[reaction.emoji_name].push(reaction);
+        return acc;
+      },
+      {}
+    );
+
+    return (
+      <div className="mt-2 flex flex-wrap gap-1">
+        {Object.entries(grouped).map(([emojiName, list]) => {
+          const emoji = customEmojis.find((e) => e.name === emojiName);
+          const mineReacted = !!me && list.some((r) => r.user_id === me.id);
+
           return (
-            <img
-              key={index}
-              src={emoji.image_url}
-              alt={`:${emoji.name}:`}
-              title={`:${emoji.name}:`}
-              className="mx-0.5 inline-block h-7 w-7 align-middle object-contain"
-            />
+            <button
+              key={emojiName}
+              type="button"
+              onClick={() => toggleReaction(messageId, emojiName)}
+              className={`flex items-center gap-1 rounded-full border px-2 py-1 text-xs ${
+                mineReacted
+                  ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                  : "border-slate-200 bg-white text-slate-600"
+              }`}
+            >
+              {emoji ? (
+                <img
+                  src={emoji.image_url}
+                  alt={`:${emojiName}:`}
+                  className="h-4 w-4 rounded object-contain"
+                />
+              ) : (
+                <span>:{emojiName}:</span>
+              )}
+              <span>{list.length}</span>
+            </button>
           );
-        }
-      }
+        })}
+      </div>
+    );
+  }
 
-      return <span key={index}>{part}</span>;
-    });
+  function renderReactionPicker(message: Message) {
+    if (customEmojis.length === 0) return null;
+
+    return (
+      <div className="mt-1 flex max-w-[220px] gap-1 overflow-x-auto">
+        {customEmojis.slice(0, 10).map((emoji) => (
+          <button
+            key={emoji.id}
+            type="button"
+            onClick={() => toggleReaction(message.id, emoji.name)}
+            title={`:${emoji.name}:`}
+            className="rounded-full border border-slate-200 bg-white p-1 hover:bg-indigo-50"
+          >
+            <img
+              src={emoji.image_url}
+              alt={emoji.name}
+              className="h-5 w-5 rounded object-contain"
+            />
+          </button>
+        ))}
+      </div>
+    );
   }
 
   async function loadMessages(loadMore = false) {
@@ -1243,62 +1350,6 @@ export default function Home() {
           <section className="max-h-[280px] overflow-y-auto border-b border-indigo-100 bg-indigo-50/60 p-5 shrink-0">
             <h2 className="font-bold mb-4 text-slate-900">관리자 대시보드</h2>
 
-            <div className="bg-white border border-indigo-100 rounded-2xl p-4 mb-4">
-              <div className="flex flex-col sm:flex-row gap-3 sm:items-center mb-3">
-                <input
-                  value={emojiName}
-                  onChange={(e) => setEmojiName(e.target.value)}
-                  placeholder="이모티콘 이름 예: ok, bread"
-                  className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200 flex-1"
-                />
-
-                <label className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white cursor-pointer hover:bg-indigo-50">
-                  {emojiFile ? emojiFile.name : "이미지 선택"}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => setEmojiFile(e.target.files?.[0] ?? null)}
-                  />
-                </label>
-
-                <button
-                  onClick={addCustomEmoji}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-4 py-2 text-sm transition"
-                >
-                  이모티콘 등록
-                </button>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {customEmojis.length === 0 && (
-                  <p className="text-xs text-slate-400">
-                    아직 등록된 커스텀 이모티콘이 없어.
-                  </p>
-                )}
-
-                {customEmojis.map((emoji) => (
-                  <div
-                    key={emoji.id}
-                    className="flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs"
-                  >
-                    <img
-                      src={emoji.image_url}
-                      alt={`:${emoji.name}:`}
-                      className="h-5 w-5 object-contain"
-                    />
-                    <span>:{emoji.name}:</span>
-                    <button
-                      onClick={() => deleteCustomEmoji(emoji)}
-                      className="text-slate-400 hover:text-red-500"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
             <div className="bg-white border border-indigo-100 rounded-2xl p-4 mb-4 grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_100px] gap-3">
               <input
                 value={newEmail}
@@ -1324,6 +1375,65 @@ export default function Home() {
               >
                 추가
               </button>
+            </div>
+
+            <div className="bg-white border border-indigo-100 rounded-2xl p-4 mb-4">
+              <h3 className="font-semibold text-sm text-slate-900 mb-3">
+                커스텀 이모티콘
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_100px] gap-3 mb-4">
+                <input
+                  value={newEmojiName}
+                  onChange={(e) => setNewEmojiName(e.target.value)}
+                  placeholder="이름 예: ok, bread, review"
+                  className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"
+                />
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setNewEmojiFile(e.target.files?.[0] ?? null)}
+                  className="border border-slate-200 rounded-xl px-3 py-2 text-sm"
+                />
+
+                <button
+                  type="button"
+                  onClick={addCustomEmoji}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm transition py-2"
+                >
+                  등록
+                </button>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {customEmojis.length === 0 && (
+                  <p className="text-xs text-slate-400">
+                    아직 등록된 이모티콘이 없어.
+                  </p>
+                )}
+
+                {customEmojis.map((emoji) => (
+                  <div
+                    key={emoji.id}
+                    className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2"
+                  >
+                    <img
+                      src={emoji.image_url}
+                      alt={emoji.name}
+                      className="h-6 w-6 rounded object-contain"
+                    />
+                    <span className="text-xs">:{emoji.name}:</span>
+                    <button
+                      type="button"
+                      onClick={() => deleteCustomEmoji(emoji)}
+                      className="text-xs text-red-500"
+                    >
+                      삭제
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3">
@@ -1491,10 +1601,13 @@ export default function Home() {
                           >
                             {renderReplyPreview(m, mine)}
                             {m.content && (
-                              <div>{renderContentWithCustomEmojis(m.content)}</div>
+                              <div>{renderTextWithLinksAndEmojis(m.content, customEmojis)}</div>
                             )}
                             {renderMedia(m)}
                           </div>
+
+                          {renderReactions(m.id)}
+                          {renderReactionPicker(m)}
 
                           <div
                             className={`mt-1 flex gap-2 text-xs text-slate-400 ${
@@ -1613,28 +1726,26 @@ export default function Home() {
                 </div>
               )}
 
-              {emojiSuggestions.length > 0 && (
+              {showEmojiSuggest && customEmojis.length > 0 && (
                 <div className="mb-2 max-h-44 overflow-y-auto rounded-2xl border border-indigo-100 bg-white p-2 shadow-lg">
-                  <p className="px-2 pb-2 text-xs text-slate-400">
-                    커스텀 이모티콘
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
-                    {emojiSuggestions.map((emoji) => (
+                  {customEmojis
+                    .filter((emoji) => emoji.name.includes(emojiQuery))
+                    .slice(0, 12)
+                    .map((emoji) => (
                       <button
                         key={emoji.id}
                         type="button"
-                        onClick={() => insertCustomEmoji(emoji.name)}
-                        className="flex items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-indigo-50"
+                        onClick={() => insertEmoji(emoji.name)}
+                        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-indigo-50"
                       >
                         <img
                           src={emoji.image_url}
-                          alt={`:${emoji.name}:`}
-                          className="h-6 w-6 object-contain"
+                          alt={emoji.name}
+                          className="h-6 w-6 rounded object-contain"
                         />
                         <span>:{emoji.name}:</span>
                       </button>
                     ))}
-                  </div>
                 </div>
               )}
 
@@ -1654,9 +1765,30 @@ export default function Home() {
                   />
                 </label>
 
+                <button
+                  type="button"
+                  onClick={() => setShowEmojiSuggest((v) => !v)}
+                  className="px-3 py-3 rounded-xl hover:bg-indigo-50"
+                  title="이모티콘"
+                >
+                  ::
+                </button>
+
                 <input
                   value={content}
-                  onChange={(e) => setContent(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setContent(value);
+
+                    const match = value.match(/:([a-zA-Z0-9_가-힣-]*)$/);
+                    if (match) {
+                      setEmojiQuery(match[1]);
+                      setShowEmojiSuggest(true);
+                    } else {
+                      setEmojiQuery("");
+                      setShowEmojiSuggest(false);
+                    }
+                  }}
                   onFocus={markMessagesAsRead}
                   onPaste={handlePaste}
                   onKeyDown={(e) => {
