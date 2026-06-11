@@ -68,6 +68,9 @@ export default function Home() {
   const [me, setMe] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [allMessagesForBadges, setAllMessagesForBadges] = useState<Message[]>(
+    []
+  );
   const [onlineIds, setOnlineIds] = useState<number[]>([]);
 
   const [email, setEmail] = useState("");
@@ -91,6 +94,7 @@ export default function Home() {
   const [newName, setNewName] = useState("");
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const firstUnreadRef = useRef<HTMLDivElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef(true);
   const notificationOnRef = useRef(notificationOn);
@@ -114,6 +118,17 @@ export default function Home() {
   const currentRoomMemberCount =
     selectedRoom === "group" ? activeUsers.length : 2;
 
+  const firstUnreadId = useMemo(() => {
+    if (!me) return null;
+
+    const firstUnread = messages.find((m) => {
+      const readBy = m.read_by ?? [];
+      return m.user_id !== me.id && !readBy.includes(me.id);
+    });
+
+    return firstUnread?.id ?? null;
+  }, [messages, me?.id]);
+
   useEffect(() => {
     const saved = localStorage.getItem("work-log-user");
     if (saved) setMe(JSON.parse(saved));
@@ -127,6 +142,7 @@ export default function Home() {
     }
 
     loadUsers();
+    loadAllMessagesForBadges();
   }, []);
 
   useEffect(() => {
@@ -135,6 +151,7 @@ export default function Home() {
 
   useEffect(() => {
     loadMessages(false);
+    loadAllMessagesForBadges();
 
     const messagesChannel = supabase
       .channel("messages-channel")
@@ -154,6 +171,8 @@ export default function Home() {
                   (newMessage.user_id === selectedRoom &&
                     newMessage.recipient_id === me.id));
 
+          await loadAllMessagesForBadges();
+
           if (!belongsToCurrentRoom) {
             if (me && newMessage.user_id !== me.id) showNotification(newMessage);
             return;
@@ -166,7 +185,7 @@ export default function Home() {
           if (!isMine) showNotification(newMessage);
 
           if (isNearBottomRef.current || isMine) {
-            setTimeout(scrollToBottom, 50);
+            setTimeout(scrollToBottom, 80);
           } else {
             setShowScrollButton(true);
           }
@@ -175,7 +194,10 @@ export default function Home() {
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "messages" },
-        () => loadMessages(false)
+        async () => {
+          await loadMessages(false);
+          await loadAllMessagesForBadges();
+        }
       )
       .subscribe();
 
@@ -184,9 +206,10 @@ export default function Home() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "users" },
-        () => {
-          loadUsers();
-          loadMessages(false);
+        async () => {
+          await loadUsers();
+          await loadMessages(false);
+          await loadAllMessagesForBadges();
         }
       )
       .subscribe();
@@ -285,10 +308,62 @@ export default function Home() {
     });
   }
 
+  function getUnreadCount(room: "group" | number) {
+    if (!me) return 0;
+
+    return allMessagesForBadges.filter((m) => {
+      const readBy = m.read_by ?? [];
+
+      if (m.user_id === me.id) return false;
+      if (readBy.includes(me.id)) return false;
+
+      if (room === "group") {
+        return m.room_type === "group";
+      }
+
+      return (
+        m.room_type === "dm" &&
+        ((m.user_id === me.id && m.recipient_id === room) ||
+          (m.user_id === room && m.recipient_id === me.id))
+      );
+    }).length;
+  }
+
   function scrollToBottom() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     isNearBottomRef.current = true;
     setShowScrollButton(false);
+  }
+
+  function scrollAfterMessagesLoaded(loadedMessages: Message[]) {
+    if (!me) {
+      setTimeout(scrollToBottom, 120);
+      return;
+    }
+
+    const firstUnread = loadedMessages.find((m) => {
+      const readBy = m.read_by ?? [];
+      return m.user_id !== me.id && !readBy.includes(me.id);
+    });
+
+    setTimeout(() => {
+      if (firstUnread) {
+        const el = document.getElementById(`message-${firstUnread.id}`);
+
+        if (el) {
+          el.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+
+          isNearBottomRef.current = false;
+          setShowScrollButton(true);
+          return;
+        }
+      }
+
+      scrollToBottom();
+    }, 150);
   }
 
   function handleChatScroll(e: React.UIEvent<HTMLDivElement>) {
@@ -326,6 +401,16 @@ export default function Home() {
       .order("id", { ascending: true });
 
     setUsers(data ?? []);
+  }
+
+  async function loadAllMessagesForBadges() {
+    const { data } = await supabase
+      .from("messages")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(1000);
+
+    setAllMessagesForBadges(data ?? []);
   }
 
   async function loadMessages(loadMore = false) {
@@ -366,9 +451,7 @@ export default function Home() {
       }, 0);
     } else {
       setMessages(ordered);
-      setTimeout(() => {
-        if (isNearBottomRef.current) scrollToBottom();
-      }, 50);
+      scrollAfterMessagesLoaded(ordered);
     }
 
     setHasMoreMessages((data ?? []).length === PAGE_SIZE);
@@ -395,6 +478,7 @@ export default function Home() {
     }
 
     await loadMessages(false);
+    await loadAllMessagesForBadges();
   }
 
   async function login() {
@@ -418,7 +502,7 @@ export default function Home() {
     setMe(data);
     localStorage.setItem("work-log-user", JSON.stringify(data));
 
-    setTimeout(scrollToBottom, 200);
+    setTimeout(() => loadMessages(false), 100);
   }
 
   function logout() {
@@ -495,11 +579,12 @@ export default function Home() {
     setContent("");
     setPendingFiles([]);
     await loadMessages(false);
+    await loadAllMessagesForBadges();
 
     setTimeout(() => {
       scrollToBottom();
       setSending(false);
-    }, 50);
+    }, 80);
   }
 
   async function updateDisplayName(userId: number, displayName: string) {
@@ -727,75 +812,29 @@ export default function Home() {
     );
   }
 
-  if (bossMode) {
-    return (
-      <main className="min-h-screen bg-indigo-50 p-8">
-        <div className="max-w-6xl mx-auto">
-          <header className="flex justify-between items-center mb-6">
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900">
-                2026 Q3 마케팅 업무 현황
-              </h1>
-              <p className="text-sm text-slate-500">
-                Ctrl + Shift + B로 원래 화면으로 돌아가기
-              </p>
-            </div>
-            <button
-              onClick={() => setBossMode(false)}
-              className="bg-white border border-indigo-100 px-4 py-2 rounded-xl shadow-sm"
-            >
-              업무 로그 보기
-            </button>
-          </header>
-
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="bg-white border border-indigo-100 rounded-2xl p-5 shadow-sm">
-              <p className="text-sm text-slate-500">전체 담당자</p>
-              <p className="text-3xl font-bold text-indigo-600">
-                {activeUsers.length}
-              </p>
-            </div>
-            <div className="bg-white border border-indigo-100 rounded-2xl p-5 shadow-sm">
-              <p className="text-sm text-slate-500">접속 중</p>
-              <p className="text-3xl font-bold text-emerald-500">
-                {onlineUsers.length}
-              </p>
-            </div>
-            <div className="bg-white border border-indigo-100 rounded-2xl p-5 shadow-sm">
-              <p className="text-sm text-slate-500">현재 방 기록</p>
-              <p className="text-3xl font-bold text-violet-600">
-                {messages.length}
-              </p>
-            </div>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
   return (
-    <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-violet-50 p-6 overflow-hidden">
+    <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-violet-50 p-2 sm:p-6 overflow-hidden">
       <div
         style={{ opacity: opacity / 100 }}
-        className="max-w-6xl mx-auto h-[calc(100vh-48px)] bg-white/95 backdrop-blur border border-indigo-100 rounded-3xl shadow-xl overflow-hidden flex flex-col"
+        className="w-full max-w-6xl mx-auto h-[calc(100dvh-24px)] sm:h-[calc(100vh-48px)] bg-white/95 backdrop-blur border border-indigo-100 rounded-3xl shadow-xl overflow-hidden flex flex-col"
       >
-        <header className="h-[76px] flex justify-between items-center px-6 border-b border-indigo-100 bg-gradient-to-r from-white to-indigo-50 shrink-0">
+        <header className="min-h-[76px] flex flex-col sm:flex-row gap-3 sm:gap-0 justify-between sm:items-center px-4 sm:px-6 py-3 sm:py-0 border-b border-indigo-100 bg-gradient-to-r from-white to-indigo-50 shrink-0">
           <div>
-            <h1 className="text-xl font-bold text-slate-900">
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900">
               {selectedRoom === "group"
                 ? "2026 Q3 마케팅 업무 로그"
                 : `${
                     userMap.get(selectedRoom)?.display_name ?? "개인"
                   }님과의 개인 업무 로그`}
             </h1>
-            <p className="text-sm text-slate-500">
+            <p className="text-xs sm:text-sm text-slate-500">
               {selectedRoom === "group"
                 ? "전체방 / 광고 소재 / 검수 / 수정 요청 기록"
                 : "개인 업무 대화"}
             </p>
           </div>
 
-          <div className="flex gap-3 items-center">
+          <div className="flex flex-wrap gap-2 sm:gap-3 items-center justify-end">
             <div className="text-xs bg-emerald-50 text-emerald-700 px-3 py-2 rounded-full">
               접속 중 {onlineUsers.length}명
             </div>
@@ -819,7 +858,7 @@ export default function Home() {
                 max="100"
                 value={opacity}
                 onChange={(e) => setOpacity(Number(e.target.value))}
-                className="w-24"
+                className="w-20 sm:w-24"
               />
             </div>
 
@@ -830,7 +869,7 @@ export default function Home() {
                   "/default-avatar.png"
                 }
                 alt=""
-                className="w-10 h-10 rounded-full object-cover bg-slate-200 border-2 border-white shadow"
+                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover bg-slate-200 border-2 border-white shadow"
                 title="프로필 사진 변경"
               />
               <input
@@ -873,7 +912,7 @@ export default function Home() {
           <section className="max-h-[280px] overflow-y-auto border-b border-indigo-100 bg-indigo-50/60 p-5 shrink-0">
             <h2 className="font-bold mb-4 text-slate-900">관리자 대시보드</h2>
 
-            <div className="bg-white border border-indigo-100 rounded-2xl p-4 mb-4 grid grid-cols-[1fr_1fr_1fr_100px] gap-3">
+            <div className="bg-white border border-indigo-100 rounded-2xl p-4 mb-4 grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_100px] gap-3">
               <input
                 value={newEmail}
                 onChange={(e) => setNewEmail(e.target.value)}
@@ -894,7 +933,7 @@ export default function Home() {
               />
               <button
                 onClick={addUser}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm transition"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm transition py-2"
               >
                 추가
               </button>
@@ -904,7 +943,7 @@ export default function Home() {
               {users.map((u) => (
                 <div
                   key={u.id}
-                  className={`bg-white border border-indigo-100 rounded-2xl p-4 grid grid-cols-[70px_1.4fr_1fr_1fr_90px_120px] gap-3 items-center ${
+                  className={`bg-white border border-indigo-100 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-[70px_1.4fr_1fr_1fr_90px_120px] gap-3 items-center ${
                     u.is_active === false ? "opacity-40" : ""
                   }`}
                 >
@@ -993,7 +1032,7 @@ export default function Home() {
           </section>
         )}
 
-        <section className="flex-1 min-h-0 grid grid-cols-[1fr_260px]">
+        <section className="flex-1 min-h-0 grid grid-rows-[auto_1fr] lg:grid-rows-none lg:grid-cols-[1fr_260px]">
           <div className="min-h-0 flex flex-col border-r border-indigo-100">
             <div className="relative flex-1 min-h-0">
               <div
@@ -1001,7 +1040,7 @@ export default function Home() {
                 onClick={markMessagesAsRead}
                 onScroll={handleChatScroll}
                 onPaste={handlePaste}
-                className="h-full overflow-y-auto p-6 space-y-5 bg-white"
+                className="h-full overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-5 bg-white"
               >
                 {loadingMore && (
                   <div className="text-center text-xs text-slate-400">
@@ -1023,56 +1062,69 @@ export default function Home() {
                   return (
                     <div
                       key={m.id}
-                      className={`flex gap-3 ${mine ? "justify-end" : ""}`}
+                      id={`message-${m.id}`}
+                      ref={m.id === firstUnreadId ? firstUnreadRef : null}
                     >
-                      {!mine && (
-                        <img
-                          src={writer?.avatar_url || "/default-avatar.png"}
-                          alt=""
-                          className="w-10 h-10 rounded-full object-cover bg-slate-200 shrink-0 shadow-sm"
-                        />
+                      {m.id === firstUnreadId && (
+                        <div className="text-center text-xs text-indigo-600 font-medium my-3">
+                          ─ 안 읽은 메시지 ─
+                        </div>
                       )}
 
                       <div
-                        className={`max-w-[70%] ${
-                          mine ? "items-end text-right" : ""
+                        className={`flex gap-3 ${
+                          mine ? "justify-end" : ""
                         }`}
                       >
                         {!mine && (
-                          <p className="text-sm font-semibold mb-1 text-slate-700">
-                            {writer?.display_name ?? "알 수 없음"}
-                          </p>
+                          <img
+                            src={writer?.avatar_url || "/default-avatar.png"}
+                            alt=""
+                            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover bg-slate-200 shrink-0 shadow-sm"
+                          />
                         )}
 
                         <div
-                          className={`rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
-                            mine
-                              ? "bg-indigo-600 text-white rounded-tr-md"
-                              : "bg-slate-100 text-slate-900 rounded-tl-md"
+                          className={`max-w-[82%] sm:max-w-[70%] ${
+                            mine ? "items-end text-right" : ""
                           }`}
                         >
-                          {m.content && (
-                            <div>{renderTextWithLinks(m.content)}</div>
+                          {!mine && (
+                            <p className="text-sm font-semibold mb-1 text-slate-700">
+                              {writer?.display_name ?? "알 수 없음"}
+                            </p>
                           )}
-                          {renderMedia(m)}
+
+                          <div
+                            className={`rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
+                              mine
+                                ? "bg-indigo-600 text-white rounded-tr-md"
+                                : "bg-slate-100 text-slate-900 rounded-tl-md"
+                            }`}
+                          >
+                            {m.content && (
+                              <div>{renderTextWithLinks(m.content)}</div>
+                            )}
+                            {renderMedia(m)}
+                          </div>
+
+                          <p className="text-xs text-slate-400 mt-1">
+                            읽음 {readCount}/{currentRoomMemberCount} ·{" "}
+                            {formatTime(m.created_at)}
+                          </p>
                         </div>
 
-                        <p className="text-xs text-slate-400 mt-1">
-                          읽음 {readCount}/{currentRoomMemberCount} ·{" "}
-                          {formatTime(m.created_at)}
-                        </p>
+                        {mine && (
+                          <img
+                            src={
+                              (userMap.get(me.id)?.avatar_url ??
+                                me.avatar_url) || "/default-avatar.png"
+                            }
+                            alt=""
+                            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover bg-slate-200 shrink-0 shadow-sm"
+                          />
+                        )}
                       </div>
-
-                      {mine && (
-                        <img
-                          src={
-                            (userMap.get(me.id)?.avatar_url ?? me.avatar_url) ||
-                            "/default-avatar.png"
-                          }
-                          alt=""
-                          className="w-10 h-10 rounded-full object-cover bg-slate-200 shrink-0 shadow-sm"
-                        />
-                      )}
                     </div>
                   );
                 })}
@@ -1090,7 +1142,7 @@ export default function Home() {
               )}
             </div>
 
-            <div className="shrink-0 p-4 border-t border-indigo-100 bg-indigo-50/70">
+            <div className="shrink-0 p-2 sm:p-4 border-t border-indigo-100 bg-indigo-50/70">
               {pendingFiles.length > 0 && (
                 <div className="mb-3 flex gap-2 overflow-x-auto">
                   {pendingFiles.map((file, index) => {
@@ -1099,7 +1151,7 @@ export default function Home() {
                     return (
                       <div
                         key={`${file.name}-${index}`}
-                        className="relative w-24 h-24 rounded-xl border bg-white overflow-hidden shrink-0"
+                        className="relative w-20 h-20 sm:w-24 sm:h-24 rounded-xl border bg-white overflow-hidden shrink-0"
                       >
                         {file.type.startsWith("image/") ? (
                           <img
@@ -1166,13 +1218,13 @@ export default function Home() {
                       ? "전체방에 보낼 업무 내용을 입력하세요"
                       : "개인 메시지를 입력하세요"
                   }
-                  className="flex-1 px-4 py-3 outline-none text-sm"
+                  className="flex-1 px-3 sm:px-4 py-3 outline-none text-sm min-w-0"
                 />
 
                 <button
                   onClick={sendMessage}
                   disabled={sending}
-                  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl px-6 transition"
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl px-4 sm:px-6 transition"
                 >
                   등록
                 </button>
@@ -1180,7 +1232,7 @@ export default function Home() {
             </div>
           </div>
 
-          <aside className="min-h-0 bg-indigo-50/50 p-4 overflow-y-auto">
+          <aside className="order-first lg:order-last max-h-[180px] lg:max-h-none min-h-0 bg-indigo-50/50 p-3 sm:p-4 overflow-y-auto border-b lg:border-b-0">
             <h2 className="font-bold mb-3 text-sm text-slate-900">채팅방</h2>
 
             <button
@@ -1194,7 +1246,15 @@ export default function Home() {
                   : "bg-white border-indigo-100 hover:bg-indigo-50"
               }`}
             >
-              전체방
+              <div className="flex items-center justify-between gap-2">
+                <span>전체방</span>
+
+                {getUnreadCount("group") > 0 && (
+                  <span className="bg-red-500 text-white text-xs rounded-full px-2 py-0.5">
+                    {getUnreadCount("group")}
+                  </span>
+                )}
+              </div>
             </button>
 
             <div className="space-y-2 mb-6">
@@ -1227,9 +1287,16 @@ export default function Home() {
                         }`}
                       />
                     </div>
+
                     <span className="text-sm font-medium truncate">
                       {u.display_name}
                     </span>
+
+                    {getUnreadCount(u.id) > 0 && (
+                      <span className="ml-auto bg-red-500 text-white text-xs rounded-full px-2 py-0.5">
+                        {getUnreadCount(u.id)}
+                      </span>
+                    )}
                   </button>
                 ))}
             </div>
