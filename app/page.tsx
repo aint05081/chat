@@ -24,6 +24,7 @@ type Message = {
   media_name?: string | null;
   room_type?: "group" | "dm";
   recipient_id?: number | null;
+  reply_to_id?: number | null;
   users?: User;
 };
 
@@ -88,6 +89,7 @@ export default function Home() {
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
 
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -100,8 +102,6 @@ export default function Home() {
   const notificationOnRef = useRef(notificationOn);
 
   const isAdmin = me?.role === "admin";
-
-  const [replyTo, setReplyTo] = useState<Message | null>(null);
 
   const activeUsers = useMemo(
     () => users.filter((u) => u.is_active !== false),
@@ -116,6 +116,10 @@ export default function Home() {
   const userMap = useMemo(() => {
     return new Map(users.map((u) => [u.id, u]));
   }, [users]);
+
+  const messageMap = useMemo(() => {
+    return new Map(messages.map((m) => [m.id, m]));
+  }, [messages]);
 
   const currentRoomMemberCount =
     selectedRoom === "group" ? activeUsers.length : 2;
@@ -197,14 +201,8 @@ export default function Home() {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "messages" },
         async () => {
+          await loadMessages(false);
           await loadAllMessagesForBadges();
-
-isNearBottomRef.current = true;
-setShowScrollButton(false);
-
-setTimeout(() => {
-  scrollToBottom();
-}, 50);
         }
       )
       .subscribe();
@@ -338,47 +336,64 @@ setTimeout(() => {
   }
 
   function scrollToBottom() {
-  const el = chatScrollRef.current;
+    const el = chatScrollRef.current;
 
-  if (!el) return;
+    if (!el) return;
 
-  requestAnimationFrame(() => {
-    el.scrollTop = el.scrollHeight;
-    isNearBottomRef.current = true;
-    setShowScrollButton(false);
-  });
-}
-
-  function scrollAfterMessagesLoaded(loadedMessages: Message[]) {
-  if (!me) {
-    setTimeout(scrollToBottom, 150);
-    return;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+      isNearBottomRef.current = true;
+      setShowScrollButton(false);
+    });
   }
 
-  const firstUnread = loadedMessages.find((m) => {
-    const readBy = m.read_by ?? [];
-    return m.user_id !== me.id && !readBy.includes(me.id);
-  });
-
-  setTimeout(() => {
-    if (firstUnread) {
-      const el = document.getElementById(`message-${firstUnread.id}`);
-
-      if (el) {
-        el.scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        });
-
-        isNearBottomRef.current = false;
-        setShowScrollButton(true);
-        return;
-      }
+  function scrollAfterMessagesLoaded(loadedMessages: Message[]) {
+    if (!me) {
+      setTimeout(scrollToBottom, 120);
+      return;
     }
 
-    scrollToBottom();
-  }, 200);
-}
+    const firstUnread = loadedMessages.find((m) => {
+      const readBy = m.read_by ?? [];
+      return m.user_id !== me.id && !readBy.includes(me.id);
+    });
+
+    setTimeout(() => {
+      if (firstUnread) {
+        const el = document.getElementById(`message-${firstUnread.id}`);
+
+        if (el) {
+          el.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+
+          isNearBottomRef.current = false;
+          setShowScrollButton(true);
+          return;
+        }
+      }
+
+      scrollToBottom();
+    }, 200);
+  }
+
+  function scrollToMessage(messageId: number) {
+    const el = document.getElementById(`message-${messageId}`);
+
+    if (el) {
+      el.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+
+      el.classList.add("ring-2", "ring-indigo-300", "rounded-2xl");
+
+      setTimeout(() => {
+        el.classList.remove("ring-2", "ring-indigo-300", "rounded-2xl");
+      }, 1200);
+    }
+  }
 
   function handleChatScroll(e: React.UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
@@ -493,18 +508,18 @@ setTimeout(() => {
 
     await loadAllMessagesForBadges();
 
-setMessages((prev) =>
-  prev.map((m) => ({
-    ...m,
-    read_by: Array.from(new Set([...(m.read_by ?? []), me.id])),
-  }))
-);
+    setMessages((prev) =>
+      prev.map((m) => ({
+        ...m,
+        read_by: Array.from(new Set([...(m.read_by ?? []), me.id])),
+      }))
+    );
 
-setShowScrollButton(false);
+    setShowScrollButton(false);
 
-setTimeout(() => {
-  scrollToBottom();
-}, 200);
+    setTimeout(() => {
+      scrollToBottom();
+    }, 200);
   }
 
   async function login() {
@@ -577,6 +592,7 @@ setTimeout(() => {
         read_by: [me.id],
         room_type: selectedRoom === "group" ? "group" : "dm",
         recipient_id: selectedRoom === "group" ? null : selectedRoom,
+        reply_to_id: replyTo?.id ?? null,
       });
 
       if (error) {
@@ -599,11 +615,13 @@ setTimeout(() => {
         media_name: media.name,
         room_type: selectedRoom === "group" ? "group" : "dm",
         recipient_id: selectedRoom === "group" ? null : selectedRoom,
+        reply_to_id: replyTo?.id ?? null,
       });
     }
 
     setContent("");
     setPendingFiles([]);
+    setReplyTo(null);
     await loadMessages(false);
     await loadAllMessagesForBadges();
 
@@ -791,6 +809,46 @@ setTimeout(() => {
     );
   }
 
+  function renderReplyPreview(message: Message, mine: boolean) {
+    if (!message.reply_to_id) return null;
+
+    const replyMessage =
+      messageMap.get(message.reply_to_id) ??
+      allMessagesForBadges.find((m) => m.id === message.reply_to_id);
+
+    if (!replyMessage) {
+      return (
+        <div
+          className={`mb-2 rounded-xl px-3 py-2 text-xs border-l-4 ${
+            mine
+              ? "bg-white/20 border-white/70 text-white"
+              : "bg-white border-indigo-400 text-slate-600"
+          }`}
+        >
+          원본 메시지를 불러올 수 없음
+        </div>
+      );
+    }
+
+    return (
+      <button
+        onClick={() => scrollToMessage(replyMessage.id)}
+        className={`mb-2 w-full text-left rounded-xl px-3 py-2 text-xs border-l-4 ${
+          mine
+            ? "bg-white/20 border-white/70 text-white"
+            : "bg-white border-indigo-400 text-slate-600"
+        }`}
+      >
+        <div className="font-semibold mb-1">
+          {userMap.get(replyMessage.user_id)?.display_name ?? "답장"}
+        </div>
+        <div className="max-h-10 overflow-hidden opacity-80">
+          {replyMessage.content || replyMessage.media_name || "미디어"}
+        </div>
+      </button>
+    );
+  }
+
   if (!me) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-violet-50 flex items-center justify-center">
@@ -833,6 +891,86 @@ setTimeout(() => {
           >
             입장
           </button>
+        </div>
+      </main>
+    );
+  }
+
+  if (bossMode) {
+    return (
+      <main className="min-h-screen bg-indigo-50 p-8">
+        <div className="max-w-6xl mx-auto">
+          <header className="flex justify-between items-center mb-6">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">
+                2026 Q3 마케팅 업무 현황
+              </h1>
+              <p className="text-sm text-slate-500">
+                Ctrl + Shift + B로 원래 화면으로 돌아가기
+              </p>
+            </div>
+            <button
+              onClick={() => setBossMode(false)}
+              className="bg-white border border-indigo-100 px-4 py-2 rounded-xl shadow-sm"
+            >
+              업무 로그 보기
+            </button>
+          </header>
+
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="bg-white border border-indigo-100 rounded-2xl p-5 shadow-sm">
+              <p className="text-sm text-slate-500">전체 담당자</p>
+              <p className="text-3xl font-bold text-indigo-600">
+                {activeUsers.length}
+              </p>
+            </div>
+            <div className="bg-white border border-indigo-100 rounded-2xl p-5 shadow-sm">
+              <p className="text-sm text-slate-500">접속 중</p>
+              <p className="text-3xl font-bold text-emerald-500">
+                {onlineUsers.length}
+              </p>
+            </div>
+            <div className="bg-white border border-indigo-100 rounded-2xl p-5 shadow-sm">
+              <p className="text-sm text-slate-500">현재 방 기록</p>
+              <p className="text-3xl font-bold text-violet-600">
+                {messages.length}
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white border border-indigo-100 rounded-2xl overflow-hidden shadow-sm">
+            <table className="w-full text-sm">
+              <thead className="bg-indigo-50 border-b border-indigo-100">
+                <tr>
+                  <th className="text-left p-4">담당자</th>
+                  <th className="text-left p-4">상태</th>
+                  <th className="text-left p-4">진행 상태</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeUsers.map((u) => (
+                  <tr key={u.id} className="border-b last:border-b-0">
+                    <td className="p-4 flex items-center gap-3">
+                      <img
+                        src={u.avatar_url || "/default-avatar.png"}
+                        alt=""
+                        className="w-9 h-9 rounded-full object-cover bg-slate-200"
+                      />
+                      {u.display_name}
+                    </td>
+                    <td className="p-4">
+                      {isActuallyOnline(u, onlineIds) ? "진행 중" : "대기"}
+                    </td>
+                    <td className="p-4">
+                      <span className="bg-indigo-50 text-indigo-700 rounded-full px-3 py-1">
+                        검수/수정 확인
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </main>
     );
@@ -1128,16 +1266,34 @@ setTimeout(() => {
                                 : "bg-slate-100 text-slate-900 rounded-tl-md"
                             }`}
                           >
+                            {renderReplyPreview(m, mine)}
                             {m.content && (
                               <div>{renderTextWithLinks(m.content)}</div>
                             )}
                             {renderMedia(m)}
                           </div>
 
-                          <p className="text-xs text-slate-400 mt-1">
-                            읽음 {readCount}/{currentRoomMemberCount} ·{" "}
-                            {formatTime(m.created_at)}
-                          </p>
+                          <div
+                            className={`mt-1 flex gap-2 text-xs text-slate-400 ${
+                              mine ? "justify-end" : ""
+                            }`}
+                          >
+                            <span>
+                              읽음 {readCount}/{currentRoomMemberCount} ·{" "}
+                              {formatTime(m.created_at)}
+                            </span>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setReplyTo(m);
+                              }}
+                              className="rounded-full border border-indigo-100 bg-white px-2 py-0.5 text-xs text-indigo-600 shadow-sm hover:bg-indigo-50"
+                            >
+                              답장
+                            </button>
+                          </div>
                         </div>
 
                         {mine && (
@@ -1169,6 +1325,28 @@ setTimeout(() => {
             </div>
 
             <div className="shrink-0 p-2 sm:p-4 border-t border-indigo-100 bg-indigo-50/70">
+              {replyTo && (
+                <div className="mb-2 flex items-center justify-between rounded-2xl border border-indigo-200 bg-white px-4 py-3 text-sm shadow-sm">
+                  <div className="min-w-0">
+                    <p className="text-xs text-indigo-600 font-semibold mb-1">
+                      {userMap.get(replyTo.user_id)?.display_name ?? "메시지"}
+                      에게 답장
+                    </p>
+                    <p className="truncate text-slate-500">
+                      {replyTo.content || replyTo.media_name || "미디어"}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setReplyTo(null)}
+                    className="text-slate-400 hover:text-slate-900"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+
               {pendingFiles.length > 0 && (
                 <div className="mb-3 flex gap-2 overflow-x-auto">
                   {pendingFiles.map((file, index) => {
@@ -1265,6 +1443,7 @@ setTimeout(() => {
               onClick={() => {
                 setSelectedRoom("group");
                 isNearBottomRef.current = true;
+                setReplyTo(null);
               }}
               className={`w-full mb-3 text-left rounded-2xl p-3 border transition ${
                 selectedRoom === "group"
@@ -1292,6 +1471,7 @@ setTimeout(() => {
                     onClick={() => {
                       setSelectedRoom(u.id);
                       isNearBottomRef.current = true;
+                      setReplyTo(null);
                     }}
                     className={`w-full flex items-center gap-3 rounded-2xl p-3 border transition ${
                       selectedRoom === u.id
