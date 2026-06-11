@@ -19,6 +19,9 @@ type Message = {
   content: string;
   created_at: string;
   read_by?: number[] | null;
+  media_url?: string | null;
+  media_type?: string | null;
+  media_name?: string | null;
   users?: User;
 };
 
@@ -45,8 +48,10 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [content, setContent] = useState("");
 
+  const [opacity, setOpacity] = useState(95);
   const [adminOpen, setAdminOpen] = useState(false);
   const [bossMode, setBossMode] = useState(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -65,9 +70,16 @@ export default function Home() {
     [activeUsers, onlineIds]
   );
 
+  const userMap = useMemo(() => {
+    return new Map(users.map((u) => [u.id, u]));
+  }, [users]);
+
   useEffect(() => {
     const saved = localStorage.getItem("work-log-user");
     if (saved) setMe(JSON.parse(saved));
+
+    const savedOpacity = localStorage.getItem("work-log-opacity");
+    if (savedOpacity) setOpacity(Number(savedOpacity));
 
     loadUsers();
     loadMessages();
@@ -76,7 +88,21 @@ export default function Home() {
       .channel("messages-channel")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
+        { event: "INSERT", schema: "public", table: "messages" },
+        async (payload) => {
+          await loadMessages();
+
+          const newMessage = payload.new as Message;
+
+          if (me && newMessage.user_id !== me.id) {
+            setShowScrollButton(true);
+            showNotification(newMessage);
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "messages" },
         () => loadMessages()
       )
       .subscribe();
@@ -97,7 +123,7 @@ export default function Home() {
       supabase.removeChannel(messagesChannel);
       supabase.removeChannel(usersChannel);
     };
-  }, []);
+  }, [me?.id, users]);
 
   useEffect(() => {
     if (!me?.id) return;
@@ -132,8 +158,8 @@ export default function Home() {
   }, [me?.id]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    localStorage.setItem("work-log-opacity", String(opacity));
+  }, [opacity]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -145,6 +171,40 @@ export default function Home() {
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
+
+  async function requestNotificationPermission() {
+    if (!("Notification" in window)) {
+      alert("이 브라우저는 알림을 지원하지 않아.");
+      return;
+    }
+
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") alert("알림이 켜졌어.");
+  }
+
+  function showNotification(message: Message) {
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    const sender = userMap.get(message.user_id) ?? message.users;
+
+    new Notification(sender?.display_name ?? "새 메시지", {
+      body: message.content || message.media_name || "미디어를 보냈어.",
+      icon: sender?.avatar_url || "/default-avatar.png",
+    });
+  }
+
+  function scrollToBottom() {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    setShowScrollButton(false);
+  }
+
+  function handleChatScroll(e: React.UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+
+    setShowScrollButton(!isNearBottom);
+  }
 
   async function loadUsers() {
     const { data } = await supabase
@@ -215,13 +275,21 @@ export default function Home() {
     localStorage.removeItem("work-log-user");
   }
 
-  async function sendMessage() {
-    if (!me || !content.trim()) return;
+  async function sendMessage(media?: {
+    url: string;
+    type: string;
+    name: string;
+  }) {
+    if (!me) return;
+    if (!content.trim() && !media) return;
 
     const { error } = await supabase.from("messages").insert({
       user_id: me.id,
       content: content.trim(),
       read_by: [me.id],
+      media_url: media?.url ?? null,
+      media_type: media?.type ?? null,
+      media_name: media?.name ?? null,
     });
 
     if (error) {
@@ -231,6 +299,31 @@ export default function Home() {
 
     setContent("");
     await loadMessages();
+    setTimeout(scrollToBottom, 50);
+  }
+
+  async function uploadChatMedia(file: File) {
+    if (!me) return;
+
+    const fileExt = file.name.split(".").pop();
+    const filePath = `${me.id}/${Date.now()}-${crypto.randomUUID()}.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("chat-media")
+      .upload(filePath, file);
+
+    if (uploadError) {
+      alert("미디어 업로드 실패: " + uploadError.message);
+      return;
+    }
+
+    const { data } = supabase.storage.from("chat-media").getPublicUrl(filePath);
+
+    await sendMessage({
+      url: data.publicUrl,
+      type: file.type,
+      name: file.name,
+    });
   }
 
   async function updateDisplayName(userId: number, displayName: string) {
@@ -376,6 +469,40 @@ export default function Home() {
     await loadMessages();
   }
 
+  function renderMedia(message: Message) {
+    if (!message.media_url) return null;
+
+    if (message.media_type?.startsWith("image/")) {
+      return (
+        <img
+          src={message.media_url}
+          alt={message.media_name ?? ""}
+          className="mt-2 max-w-[280px] rounded-2xl border object-cover"
+        />
+      );
+    }
+
+    if (message.media_type?.startsWith("video/")) {
+      return (
+        <video
+          src={message.media_url}
+          controls
+          className="mt-2 max-w-[320px] rounded-2xl border"
+        />
+      );
+    }
+
+    return (
+      <a
+        href={message.media_url}
+        target="_blank"
+        className="mt-2 block rounded-2xl border bg-white/70 px-4 py-3 text-sm underline"
+      >
+        📎 {message.media_name ?? "파일 열기"}
+      </a>
+    );
+  }
+
   if (!me) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-violet-50 flex items-center justify-center">
@@ -427,7 +554,7 @@ export default function Home() {
           <header className="flex justify-between items-center mb-6">
             <div>
               <h1 className="text-2xl font-bold text-slate-900">
-                콘텐츠 마케팅 업무 할당하기
+                2026 Q3 마케팅 업무 현황
               </h1>
               <p className="text-sm text-slate-500">
                 Ctrl + Shift + B로 원래 화면으로 돌아가기
@@ -487,7 +614,7 @@ export default function Home() {
                     </td>
                     <td className="p-4">
                       <span className="bg-indigo-50 text-indigo-700 rounded-full px-3 py-1">
-                        수정 중
+                        검수/수정 확인
                       </span>
                     </td>
                   </tr>
@@ -502,11 +629,14 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-violet-50 p-6 overflow-hidden">
-      <div className="max-w-6xl mx-auto h-[calc(100vh-48px)] bg-white/95 backdrop-blur border border-indigo-100 rounded-3xl shadow-xl overflow-hidden flex flex-col">
+      <div
+        style={{ opacity: opacity / 100 }}
+        className="max-w-6xl mx-auto h-[calc(100vh-48px)] bg-white/95 backdrop-blur border border-indigo-100 rounded-3xl shadow-xl overflow-hidden flex flex-col"
+      >
         <header className="h-[76px] flex justify-between items-center px-6 border-b border-indigo-100 bg-gradient-to-r from-white to-indigo-50 shrink-0">
           <div>
             <h1 className="text-xl font-bold text-slate-900">
-              콘텐츠 마케팅 업무 할당하기
+              2026 Q3 마케팅 업무 로그
             </h1>
             <p className="text-sm text-slate-500">
               광고 소재 / 검수 / 수정 요청 기록
@@ -518,9 +648,31 @@ export default function Home() {
               접속 중 {onlineUsers.length}명
             </div>
 
+            <button
+              onClick={requestNotificationPermission}
+              className="text-sm border border-indigo-100 bg-white hover:bg-indigo-50 rounded-xl px-3 py-2 transition"
+            >
+              알림
+            </button>
+
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span>투명도</span>
+              <input
+                type="range"
+                min="70"
+                max="100"
+                value={opacity}
+                onChange={(e) => setOpacity(Number(e.target.value))}
+                className="w-20"
+              />
+            </div>
+
             <label className="cursor-pointer">
               <img
-                src={me.avatar_url || "/default-avatar.png"}
+                src={
+                  (userMap.get(me.id)?.avatar_url ?? me.avatar_url) ||
+                  "/default-avatar.png"
+                }
                 alt=""
                 className="w-10 h-10 rounded-full object-cover bg-slate-200 border-2 border-white shadow"
                 title="프로필 사진 변경"
@@ -687,70 +839,100 @@ export default function Home() {
 
         <section className="flex-1 min-h-0 grid grid-cols-[1fr_240px]">
           <div className="min-h-0 flex flex-col border-r border-indigo-100">
-            <div
-              onClick={markMessagesAsRead}
-              className="flex-1 min-h-0 overflow-y-auto p-6 space-y-5 bg-white"
-            >
-              {messages.map((m) => {
-                const mine = m.user_id === me.id;
-                const readCount = m.read_by?.length ?? 0;
+            <div className="relative flex-1 min-h-0">
+              <div
+                onClick={markMessagesAsRead}
+                onScroll={handleChatScroll}
+                className="h-full overflow-y-auto p-6 space-y-5 bg-white"
+              >
+                {messages.map((m) => {
+                  const mine = m.user_id === me.id;
+                  const readCount = m.read_by?.length ?? 0;
+                  const writer = userMap.get(m.user_id) ?? m.users;
 
-                return (
-                  <div
-                    key={m.id}
-                    className={`flex gap-3 ${mine ? "justify-end" : ""}`}
-                  >
-                    {!mine && (
-                      <img
-                        src={m.users?.avatar_url || "/default-avatar.png"}
-                        alt=""
-                        className="w-10 h-10 rounded-full object-cover bg-slate-200 shrink-0 shadow-sm"
-                      />
-                    )}
-
+                  return (
                     <div
-                      className={`max-w-[70%] ${
-                        mine ? "items-end text-right" : ""
-                      }`}
+                      key={m.id}
+                      className={`flex gap-3 ${mine ? "justify-end" : ""}`}
                     >
                       {!mine && (
-                        <p className="text-sm font-semibold mb-1 text-slate-700">
-                          {m.users?.display_name ?? "알 수 없음"}
-                        </p>
+                        <img
+                          src={writer?.avatar_url || "/default-avatar.png"}
+                          alt=""
+                          className="w-10 h-10 rounded-full object-cover bg-slate-200 shrink-0 shadow-sm"
+                        />
                       )}
 
                       <div
-                        className={`rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
-                          mine
-                            ? "bg-indigo-600 text-white rounded-tr-md"
-                            : "bg-slate-100 text-slate-900 rounded-tl-md"
+                        className={`max-w-[70%] ${
+                          mine ? "items-end text-right" : ""
                         }`}
                       >
-                        {m.content}
+                        {!mine && (
+                          <p className="text-sm font-semibold mb-1 text-slate-700">
+                            {writer?.display_name ?? "알 수 없음"}
+                          </p>
+                        )}
+
+                        <div
+                          className={`rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
+                            mine
+                              ? "bg-indigo-600 text-white rounded-tr-md"
+                              : "bg-slate-100 text-slate-900 rounded-tl-md"
+                          }`}
+                        >
+                          {m.content && <div>{m.content}</div>}
+                          {renderMedia(m)}
+                        </div>
+
+                        <p className="text-xs text-slate-400 mt-1">
+                          읽음 {readCount}/{activeUsers.length} ·{" "}
+                          {formatTime(m.created_at)}
+                        </p>
                       </div>
 
-                      <p className="text-xs text-slate-400 mt-1">
-                        읽음 {readCount}/{activeUsers.length} ·{" "}
-                        {formatTime(m.created_at)}
-                      </p>
+                      {mine && (
+                        <img
+                          src={
+                            (userMap.get(me.id)?.avatar_url ?? me.avatar_url) ||
+                            "/default-avatar.png"
+                          }
+                          alt=""
+                          className="w-10 h-10 rounded-full object-cover bg-slate-200 shrink-0 shadow-sm"
+                        />
+                      )}
                     </div>
+                  );
+                })}
 
-                    {mine && (
-                      <img
-                        src={me.avatar_url || "/default-avatar.png"}
-                        alt=""
-                        className="w-10 h-10 rounded-full object-cover bg-slate-200 shrink-0 shadow-sm"
-                      />
-                    )}
-                  </div>
-                );
-              })}
+                <div ref={bottomRef} />
+              </div>
 
-              <div ref={bottomRef} />
+              {showScrollButton && (
+                <button
+                  onClick={scrollToBottom}
+                  className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full px-4 py-2 shadow-lg z-50"
+                >
+                  ↓ 최신 메시지
+                </button>
+              )}
             </div>
 
             <div className="shrink-0 p-4 border-t border-indigo-100 bg-indigo-50/70">
               <div className="flex gap-2 bg-white border border-indigo-100 rounded-2xl p-2 shadow-sm">
+                <label className="cursor-pointer px-3 py-3 rounded-xl hover:bg-indigo-50">
+                  📎
+                  <input
+                    type="file"
+                    accept="image/*,video/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.zip"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) uploadChatMedia(file);
+                    }}
+                  />
+                </label>
+
                 <input
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
@@ -763,7 +945,7 @@ export default function Home() {
                 />
 
                 <button
-                  onClick={sendMessage}
+                  onClick={() => sendMessage()}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6 transition"
                 >
                   등록
