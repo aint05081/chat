@@ -27,6 +27,8 @@ type Message = {
   users?: User;
 };
 
+const PAGE_SIZE = 50;
+
 function isActuallyOnline(user: User, onlineIds: number[]) {
   return onlineIds.includes(user.id);
 }
@@ -37,6 +39,28 @@ function formatTime(dateString: string) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+  });
+}
+
+function renderTextWithLinks(text: string) {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+
+  return text.split(urlRegex).map((part, index) => {
+    if (part.match(urlRegex)) {
+      return (
+        <a
+          key={index}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline font-medium break-all"
+        >
+          {part}
+        </a>
+      );
+    }
+
+    return <span key={index}>{part}</span>;
   });
 }
 
@@ -57,6 +81,9 @@ export default function Home() {
   const [sending, setSending] = useState(false);
   const [notificationOn, setNotificationOn] = useState(true);
   const [selectedRoom, setSelectedRoom] = useState<"group" | number>("group");
+
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -98,7 +125,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    loadMessages();
+    loadMessages(false);
 
     const messagesChannel = supabase
       .channel("messages-channel")
@@ -106,9 +133,25 @@ export default function Home() {
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "messages" },
         async (payload) => {
-          await loadMessages();
-
           const newMessage = payload.new as Message;
+
+          const belongsToCurrentRoom =
+            selectedRoom === "group"
+              ? newMessage.room_type === "group"
+              : newMessage.room_type === "dm" &&
+                me &&
+                ((newMessage.user_id === me.id &&
+                  newMessage.recipient_id === selectedRoom) ||
+                  (newMessage.user_id === selectedRoom &&
+                    newMessage.recipient_id === me.id));
+
+          if (!belongsToCurrentRoom) {
+            if (me && newMessage.user_id !== me.id) showNotification(newMessage);
+            return;
+          }
+
+          await loadMessages(false);
+
           const isMine = me && newMessage.user_id === me.id;
 
           if (!isMine) showNotification(newMessage);
@@ -123,7 +166,7 @@ export default function Home() {
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "messages" },
-        () => loadMessages()
+        () => loadMessages(false)
       )
       .subscribe();
 
@@ -134,7 +177,7 @@ export default function Home() {
         { event: "*", schema: "public", table: "users" },
         () => {
           loadUsers();
-          loadMessages();
+          loadMessages(false);
         }
       )
       .subscribe();
@@ -207,12 +250,7 @@ export default function Home() {
     }
 
     const permission = await Notification.requestPermission();
-
-    if (permission === "granted") {
-      return true;
-    }
-
-    return false;
+    return permission === "granted";
   }
 
   async function toggleNotification() {
@@ -250,6 +288,24 @@ export default function Home() {
 
     isNearBottomRef.current = isNearBottom;
     setShowScrollButton(!isNearBottom);
+
+    if (el.scrollTop < 80 && hasMoreMessages && !loadingMore) {
+      loadMessages(true);
+    }
+  }
+
+  async function handlePaste(e: React.ClipboardEvent<HTMLDivElement>) {
+    const items = e.clipboardData.items;
+
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          await uploadChatMedia(file);
+        }
+      }
+    }
   }
 
   async function loadUsers() {
@@ -261,12 +317,16 @@ export default function Home() {
     setUsers(data ?? []);
   }
 
-  async function loadMessages() {
+  async function loadMessages(loadMore = false) {
+    if (loadMore) setLoadingMore(true);
+
+    const currentCount = loadMore ? messages.length : 0;
+
     let query = supabase
       .from("messages")
       .select("*, users(*)")
-      .order("created_at", { ascending: true })
-      .limit(300);
+      .order("created_at", { ascending: false })
+      .range(currentCount, currentCount + PAGE_SIZE - 1);
 
     if (selectedRoom === "group") {
       query = query.eq("room_type", "group");
@@ -279,7 +339,29 @@ export default function Home() {
     }
 
     const { data } = await query;
-    setMessages(data ?? []);
+    const ordered = (data ?? []).reverse();
+
+    if (loadMore) {
+      const scrollEl = chatScrollRef.current;
+      const previousScrollHeight = scrollEl?.scrollHeight ?? 0;
+
+      setMessages((prev) => [...ordered, ...prev]);
+
+      setTimeout(() => {
+        if (scrollEl) {
+          const nextScrollHeight = scrollEl.scrollHeight;
+          scrollEl.scrollTop = nextScrollHeight - previousScrollHeight;
+        }
+      }, 0);
+    } else {
+      setMessages(ordered);
+      setTimeout(() => {
+        if (isNearBottomRef.current) scrollToBottom();
+      }, 50);
+    }
+
+    setHasMoreMessages((data ?? []).length === PAGE_SIZE);
+    setLoadingMore(false);
   }
 
   async function markMessagesAsRead() {
@@ -301,7 +383,7 @@ export default function Home() {
         .eq("id", message.id);
     }
 
-    await loadMessages();
+    await loadMessages(false);
   }
 
   async function login() {
@@ -365,7 +447,7 @@ export default function Home() {
     }
 
     setContent("");
-    await loadMessages();
+    await loadMessages(false);
 
     setTimeout(() => {
       scrollToBottom();
@@ -411,7 +493,7 @@ export default function Home() {
     }
 
     await loadUsers();
-    await loadMessages();
+    await loadMessages(false);
 
     if (me?.id === userId) {
       const updatedMe = { ...me, display_name: displayName.trim() };
@@ -465,7 +547,7 @@ export default function Home() {
 
     await supabase.from("users").delete().eq("id", user.id);
     await loadUsers();
-    await loadMessages();
+    await loadMessages(false);
   }
 
   async function addUser() {
@@ -537,7 +619,7 @@ export default function Home() {
     }
 
     await loadUsers();
-    await loadMessages();
+    await loadMessages(false);
   }
 
   function renderMedia(message: Message) {
@@ -567,6 +649,7 @@ export default function Home() {
       <a
         href={message.media_url}
         target="_blank"
+        rel="noopener noreferrer"
         className="mt-2 block rounded-2xl border bg-white/70 px-4 py-3 text-sm underline"
       >
         📎 {message.media_name ?? "파일 열기"}
@@ -656,7 +739,7 @@ export default function Home() {
               </p>
             </div>
             <div className="bg-white border border-indigo-100 rounded-2xl p-5 shadow-sm">
-              <p className="text-sm text-slate-500">오늘 기록</p>
+              <p className="text-sm text-slate-500">현재 방 기록</p>
               <p className="text-3xl font-bold text-violet-600">
                 {messages.length}
               </p>
@@ -860,8 +943,8 @@ export default function Home() {
                       {u.is_active === false
                         ? "비활성"
                         : isActuallyOnline(u, onlineIds)
-                          ? "접속 중"
-                          : "오프라인"}
+                        ? "접속 중"
+                        : "오프라인"}
                     </p>
                   </div>
 
@@ -892,8 +975,21 @@ export default function Home() {
                 ref={chatScrollRef}
                 onClick={markMessagesAsRead}
                 onScroll={handleChatScroll}
+                onPaste={handlePaste}
                 className="h-full overflow-y-auto p-6 space-y-5 bg-white"
               >
+                {loadingMore && (
+                  <div className="text-center text-xs text-slate-400">
+                    이전 메시지 불러오는 중...
+                  </div>
+                )}
+
+                {hasMoreMessages && !loadingMore && (
+                  <div className="text-center text-xs text-slate-400">
+                    위로 올리면 이전 메시지를 더 불러와요
+                  </div>
+                )}
+
                 {messages.map((m) => {
                   const mine = m.user_id === me.id;
                   const readCount = m.read_by?.length ?? 0;
@@ -930,7 +1026,7 @@ export default function Home() {
                               : "bg-slate-100 text-slate-900 rounded-tl-md"
                           }`}
                         >
-                          {m.content && <div>{m.content}</div>}
+                          {m.content && <div>{renderTextWithLinks(m.content)}</div>}
                           {renderMedia(m)}
                         </div>
 
@@ -986,6 +1082,18 @@ export default function Home() {
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
                   onFocus={markMessagesAsRead}
+                  onPaste={async (e) => {
+                    const items = e.clipboardData.items;
+                    for (const item of items) {
+                      if (item.type.startsWith("image/")) {
+                        const file = item.getAsFile();
+                        if (file) {
+                          e.preventDefault();
+                          await uploadChatMedia(file);
+                        }
+                      }
+                    }
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                       e.preventDefault();
@@ -1015,7 +1123,10 @@ export default function Home() {
             <h2 className="font-bold mb-3 text-sm text-slate-900">채팅방</h2>
 
             <button
-              onClick={() => setSelectedRoom("group")}
+              onClick={() => {
+                setSelectedRoom("group");
+                isNearBottomRef.current = true;
+              }}
               className={`w-full mb-3 text-left rounded-2xl p-3 border transition ${
                 selectedRoom === "group"
                   ? "bg-indigo-600 text-white border-indigo-600"
@@ -1031,7 +1142,10 @@ export default function Home() {
                 .map((u) => (
                   <button
                     key={u.id}
-                    onClick={() => setSelectedRoom(u.id)}
+                    onClick={() => {
+                      setSelectedRoom(u.id);
+                      isNearBottomRef.current = true;
+                    }}
                     className={`w-full flex items-center gap-3 rounded-2xl p-3 border transition ${
                       selectedRoom === u.id
                         ? "bg-indigo-600 text-white border-indigo-600"
