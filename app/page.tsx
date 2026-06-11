@@ -331,11 +331,18 @@ export default function Home() {
     await loadUsers();
   }
 
-  async function uploadAvatar(file: File) {
+  async function uploadAvatar(file: File, targetUserId?: number) {
     if (!me) return;
 
+    const userId = targetUserId ?? me.id;
+
+    if (targetUserId && targetUserId !== me.id && !isAdmin) {
+      alert("관리자만 다른 사람 사진을 변경할 수 있어.");
+      return;
+    }
+
     const fileExt = file.name.split(".").pop();
-    const filePath = `${me.id}/avatar.${fileExt}`;
+    const filePath = `${userId}/avatar.${fileExt}`;
 
     const { error: uploadError } = await supabase.storage
       .from("avatars")
@@ -352,16 +359,18 @@ export default function Home() {
     const { error: updateError } = await supabase
       .from("users")
       .update({ avatar_url: avatarUrl })
-      .eq("id", me.id);
+      .eq("id", userId);
 
     if (updateError) {
       alert("DB 저장 실패: " + updateError.message);
       return;
     }
 
-    const updatedMe = { ...me, avatar_url: avatarUrl };
-    setMe(updatedMe);
-    localStorage.setItem("work-log-user", JSON.stringify(updatedMe));
+    if (me.id === userId) {
+      const updatedMe = { ...me, avatar_url: avatarUrl };
+      setMe(updatedMe);
+      localStorage.setItem("work-log-user", JSON.stringify(updatedMe));
+    }
 
     await loadUsers();
     await loadMessages();
@@ -418,7 +427,7 @@ export default function Home() {
           <header className="flex justify-between items-center mb-6">
             <div>
               <h1 className="text-2xl font-bold text-slate-900">
-                콘텐츠 마케팅 팀 현황 공유
+                2026 Q3 마케팅 업무 현황
               </h1>
               <p className="text-sm text-slate-500">
                 Ctrl + Shift + B로 원래 화면으로 돌아가기
@@ -428,7 +437,7 @@ export default function Home() {
               onClick={() => setBossMode(false)}
               className="bg-white border border-indigo-100 px-4 py-2 rounded-xl shadow-sm"
             >
-              업무 할당 보기
+              업무 로그 보기
             </button>
           </header>
 
@@ -478,7 +487,7 @@ export default function Home() {
                     </td>
                     <td className="p-4">
                       <span className="bg-indigo-50 text-indigo-700 rounded-full px-3 py-1">
-                        수정중
+                        검수/수정 확인
                       </span>
                     </td>
                   </tr>
@@ -497,7 +506,7 @@ export default function Home() {
         <header className="h-[76px] flex justify-between items-center px-6 border-b border-indigo-100 bg-gradient-to-r from-white to-indigo-50 shrink-0">
           <div>
             <h1 className="text-xl font-bold text-slate-900">
-              콘텐츠 마케팅 업무 현황
+              2026 Q3 마케팅 업무 로그
             </h1>
             <p className="text-sm text-slate-500">
               광고 소재 / 검수 / 수정 요청 기록
@@ -522,7 +531,7 @@ export default function Home() {
                 className="hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
-                  if (file) uploadAvatar(file);
+                  if (file) uploadAvatar(file, me.id);
                 }}
               />
             </label>
@@ -591,12 +600,14 @@ export default function Home() {
                     u.is_active === false ? "opacity-40" : ""
                   }`}
                 >
-                  <div className="relative">
+                  <label className="relative cursor-pointer group w-12 h-12">
                     <img
                       src={u.avatar_url || "/default-avatar.png"}
                       alt=""
                       className="w-12 h-12 rounded-full object-cover bg-slate-200"
+                      title="프로필 사진 변경"
                     />
+
                     <span
                       className={`absolute right-1 bottom-1 w-3 h-3 rounded-full border-2 border-white ${
                         isActuallyOnline(u, onlineIds)
@@ -604,7 +615,21 @@ export default function Home() {
                           : "bg-slate-300"
                       }`}
                     />
-                  </div>
+
+                    <div className="absolute inset-0 rounded-full bg-black/40 text-white text-[10px] hidden group-hover:flex items-center justify-center">
+                      변경
+                    </div>
+
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) uploadAvatar(file, u.id);
+                      }}
+                    />
+                  </label>
 
                   <div>
                     <p className="text-xs text-slate-500 mb-1">이메일</p>
