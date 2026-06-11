@@ -28,6 +28,13 @@ type Message = {
   users?: User;
 };
 
+type CustomEmoji = {
+  id: number;
+  name: string;
+  image_url: string;
+  created_at?: string;
+};
+
 const PAGE_SIZE = 50;
 
 function isActuallyOnline(user: User, onlineIds: number[]) {
@@ -72,6 +79,7 @@ export default function Home() {
   const [allMessagesForBadges, setAllMessagesForBadges] = useState<Message[]>(
     []
   );
+  const [customEmojis, setCustomEmojis] = useState<CustomEmoji[]>([]);
   const [onlineIds, setOnlineIds] = useState<number[]>([]);
 
   const [email, setEmail] = useState("");
@@ -94,6 +102,9 @@ export default function Home() {
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newName, setNewName] = useState("");
+
+  const [emojiName, setEmojiName] = useState("");
+  const [emojiFile, setEmojiFile] = useState<File | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const firstUnreadRef = useRef<HTMLDivElement | null>(null);
@@ -120,6 +131,23 @@ export default function Home() {
   const messageMap = useMemo(() => {
     return new Map(messages.map((m) => [m.id, m]));
   }, [messages]);
+
+  const customEmojiMap = useMemo(() => {
+    return new Map(customEmojis.map((emoji) => [emoji.name, emoji]));
+  }, [customEmojis]);
+
+  const emojiQuery = useMemo(() => {
+    const match = content.match(/:([a-zA-Z0-9_\-가-힣]*)$/);
+    return match ? match[1] : null;
+  }, [content]);
+
+  const emojiSuggestions = useMemo(() => {
+    if (emojiQuery === null) return [];
+
+    return customEmojis
+      .filter((emoji) => emoji.name.includes(emojiQuery))
+      .slice(0, 8);
+  }, [customEmojis, emojiQuery]);
 
   const currentRoomMemberCount =
     selectedRoom === "group" ? activeUsers.length : 2;
@@ -149,11 +177,29 @@ export default function Home() {
 
     loadUsers();
     loadAllMessagesForBadges();
+    loadCustomEmojis();
   }, []);
 
   useEffect(() => {
     notificationOnRef.current = notificationOn;
   }, [notificationOn]);
+
+  useEffect(() => {
+    loadCustomEmojis();
+
+    const customEmojiChannel = supabase
+      .channel("custom-emojis-channel")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "custom_emojis" },
+        () => loadCustomEmojis()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(customEmojiChannel);
+    };
+  }, []);
 
   useEffect(() => {
     loadMessages(false);
@@ -440,6 +486,127 @@ export default function Home() {
       .limit(1000);
 
     setAllMessagesForBadges(data ?? []);
+  }
+
+  async function loadCustomEmojis() {
+    const { data } = await supabase
+      .from("custom_emojis")
+      .select("*")
+      .order("name", { ascending: true });
+
+    setCustomEmojis(data ?? []);
+  }
+
+  function normalizeEmojiName(value: string) {
+    return value
+      .trim()
+      .replace(/^:+|:+$/g, "")
+      .replace(/\s+/g, "_")
+      .toLowerCase();
+  }
+
+  async function addCustomEmoji() {
+    if (!isAdmin) return;
+
+    const normalizedName = normalizeEmojiName(emojiName);
+
+    if (!normalizedName || !emojiFile) {
+      alert("이모티콘 이름과 이미지를 모두 넣어줘.");
+      return;
+    }
+
+    const fileExt = emojiFile.name.split(".").pop();
+    const filePath = `${normalizedName}-${Date.now()}.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("custom-emojis")
+      .upload(filePath, emojiFile, { upsert: true });
+
+    if (uploadError) {
+      alert("이모티콘 업로드 실패: " + uploadError.message);
+      return;
+    }
+
+    const { data } = supabase.storage
+      .from("custom-emojis")
+      .getPublicUrl(filePath);
+
+    const { error: insertError } = await supabase.from("custom_emojis").insert({
+      name: normalizedName,
+      image_url: `${data.publicUrl}?t=${Date.now()}`,
+    });
+
+    if (insertError) {
+      alert("이모티콘 저장 실패: " + insertError.message);
+      return;
+    }
+
+    setEmojiName("");
+    setEmojiFile(null);
+    await loadCustomEmojis();
+  }
+
+  async function deleteCustomEmoji(emoji: CustomEmoji) {
+    if (!isAdmin) return;
+
+    const ok = confirm(`:${emoji.name}: 이모티콘을 삭제할까?`);
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from("custom_emojis")
+      .delete()
+      .eq("id", emoji.id);
+
+    if (error) {
+      alert("이모티콘 삭제 실패: " + error.message);
+      return;
+    }
+
+    await loadCustomEmojis();
+  }
+
+  function insertCustomEmoji(name: string) {
+    setContent((prev) => prev.replace(/:([a-zA-Z0-9_\-가-힣]*)$/, `:${name}: `));
+  }
+
+  function renderContentWithCustomEmojis(text: string) {
+    const tokenRegex = /(https?:\/\/[^\s]+|:[a-zA-Z0-9_\-가-힣]+:)/g;
+
+    return text.split(tokenRegex).map((part, index) => {
+      if (part.match(/^https?:\/\/[^\s]+$/)) {
+        return (
+          <a
+            key={index}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline font-medium break-all"
+          >
+            {part}
+          </a>
+        );
+      }
+
+      const emojiMatch = part.match(/^:([a-zA-Z0-9_\-가-힣]+):$/);
+
+      if (emojiMatch) {
+        const emoji = customEmojiMap.get(emojiMatch[1]);
+
+        if (emoji) {
+          return (
+            <img
+              key={index}
+              src={emoji.image_url}
+              alt={`:${emoji.name}:`}
+              title={`:${emoji.name}:`}
+              className="mx-0.5 inline-block h-7 w-7 align-middle object-contain"
+            />
+          );
+        }
+      }
+
+      return <span key={index}>{part}</span>;
+    });
   }
 
   async function loadMessages(loadMore = false) {
@@ -1076,6 +1243,62 @@ export default function Home() {
           <section className="max-h-[280px] overflow-y-auto border-b border-indigo-100 bg-indigo-50/60 p-5 shrink-0">
             <h2 className="font-bold mb-4 text-slate-900">관리자 대시보드</h2>
 
+            <div className="bg-white border border-indigo-100 rounded-2xl p-4 mb-4">
+              <div className="flex flex-col sm:flex-row gap-3 sm:items-center mb-3">
+                <input
+                  value={emojiName}
+                  onChange={(e) => setEmojiName(e.target.value)}
+                  placeholder="이모티콘 이름 예: ok, bread"
+                  className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200 flex-1"
+                />
+
+                <label className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white cursor-pointer hover:bg-indigo-50">
+                  {emojiFile ? emojiFile.name : "이미지 선택"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => setEmojiFile(e.target.files?.[0] ?? null)}
+                  />
+                </label>
+
+                <button
+                  onClick={addCustomEmoji}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-4 py-2 text-sm transition"
+                >
+                  이모티콘 등록
+                </button>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {customEmojis.length === 0 && (
+                  <p className="text-xs text-slate-400">
+                    아직 등록된 커스텀 이모티콘이 없어.
+                  </p>
+                )}
+
+                {customEmojis.map((emoji) => (
+                  <div
+                    key={emoji.id}
+                    className="flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs"
+                  >
+                    <img
+                      src={emoji.image_url}
+                      alt={`:${emoji.name}:`}
+                      className="h-5 w-5 object-contain"
+                    />
+                    <span>:{emoji.name}:</span>
+                    <button
+                      onClick={() => deleteCustomEmoji(emoji)}
+                      className="text-slate-400 hover:text-red-500"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="bg-white border border-indigo-100 rounded-2xl p-4 mb-4 grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_100px] gap-3">
               <input
                 value={newEmail}
@@ -1268,7 +1491,7 @@ export default function Home() {
                           >
                             {renderReplyPreview(m, mine)}
                             {m.content && (
-                              <div>{renderTextWithLinks(m.content)}</div>
+                              <div>{renderContentWithCustomEmojis(m.content)}</div>
                             )}
                             {renderMedia(m)}
                           </div>
@@ -1387,6 +1610,31 @@ export default function Home() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {emojiSuggestions.length > 0 && (
+                <div className="mb-2 max-h-44 overflow-y-auto rounded-2xl border border-indigo-100 bg-white p-2 shadow-lg">
+                  <p className="px-2 pb-2 text-xs text-slate-400">
+                    커스텀 이모티콘
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                    {emojiSuggestions.map((emoji) => (
+                      <button
+                        key={emoji.id}
+                        type="button"
+                        onClick={() => insertCustomEmoji(emoji.name)}
+                        className="flex items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-indigo-50"
+                      >
+                        <img
+                          src={emoji.image_url}
+                          alt={`:${emoji.name}:`}
+                          className="h-6 w-6 object-contain"
+                        />
+                        <span>:{emoji.name}:</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 
