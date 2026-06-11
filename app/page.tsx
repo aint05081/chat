@@ -427,7 +427,7 @@ export default function Home() {
           <header className="flex justify-between items-center mb-6">
             <div>
               <h1 className="text-2xl font-bold text-slate-900">
-                2026 Q3 마케팅 업무 현황
+                콘텐츠 마케팅 업무 할당하기
               </h1>
               <p className="text-sm text-slate-500">
                 Ctrl + Shift + B로 원래 화면으로 돌아가기
@@ -487,7 +487,7 @@ export default function Home() {
                     </td>
                     <td className="p-4">
                       <span className="bg-indigo-50 text-indigo-700 rounded-full px-3 py-1">
-                        검수/수정 확인
+                        수정 중
                       </span>
                     </td>
                   </tr>
@@ -506,7 +506,7 @@ export default function Home() {
         <header className="h-[76px] flex justify-between items-center px-6 border-b border-indigo-100 bg-gradient-to-r from-white to-indigo-50 shrink-0">
           <div>
             <h1 className="text-xl font-bold text-slate-900">
-              2026 Q3 마케팅 업무 로그
+              콘텐츠 마케팅 업무 할당하기
             </h1>
             <p className="text-sm text-slate-500">
               광고 소재 / 검수 / 수정 요청 기록
