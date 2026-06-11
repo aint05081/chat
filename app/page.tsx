@@ -696,7 +696,7 @@ export default function Home() {
     if (customEmojis.length === 0) return null;
 
     return (
-      <div className="mt-1 flex max-w-[220px] gap-1 overflow-x-auto">
+      <div className="mt-1 hidden max-w-[220px] gap-1 overflow-x-auto group-hover:flex">
         {customEmojis.slice(0, 10).map((emoji) => (
           <button
             key={emoji.id}
@@ -1561,6 +1561,7 @@ export default function Home() {
                       key={m.id}
                       id={`message-${m.id}`}
                       ref={m.id === firstUnreadId ? firstUnreadRef : null}
+                      className="group"
                     >
                       {m.id === firstUnreadId && (
                         <div className="text-center text-xs text-indigo-600 font-medium my-3">
