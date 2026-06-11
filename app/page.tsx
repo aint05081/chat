@@ -478,7 +478,7 @@ export default function Home() {
                     </td>
                     <td className="p-4">
                       <span className="bg-indigo-50 text-indigo-700 rounded-full px-3 py-1">
-                        검수/수정
+                        수정중
                       </span>
                     </td>
                   </tr>
