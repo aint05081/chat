@@ -84,6 +84,7 @@ export default function Home() {
 
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -303,16 +304,18 @@ export default function Home() {
   }
 
   async function handlePaste(e: React.ClipboardEvent<HTMLDivElement>) {
-    const items = e.clipboardData.items;
+    const files: File[] = [];
 
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
+    for (const item of Array.from(e.clipboardData.items)) {
+      if (item.kind === "file") {
         const file = item.getAsFile();
-        if (file) {
-          e.preventDefault();
-          await uploadChatMedia(file);
-        }
+        if (file) files.push(file);
       }
+    }
+
+    if (files.length > 0) {
+      e.preventDefault();
+      setPendingFiles((prev) => [...prev, ...files]);
     }
   }
 
@@ -424,67 +427,79 @@ export default function Home() {
     localStorage.removeItem("work-log-user");
   }
 
-  async function sendMessage(media?: {
-    url: string;
-    type: string;
-    name: string;
-  }) {
+  async function uploadOneChatMedia(file: File) {
+    if (!me) return null;
+
+    const fileExt = file.name.split(".").pop();
+    const filePath = `${me.id}/${Date.now()}-${crypto.randomUUID()}.${fileExt}`;
+
+    const { error } = await supabase.storage
+      .from("chat-media")
+      .upload(filePath, file);
+
+    if (error) {
+      alert("미디어 업로드 실패: " + error.message);
+      return null;
+    }
+
+    const { data } = supabase.storage.from("chat-media").getPublicUrl(filePath);
+
+    return {
+      url: data.publicUrl,
+      type: file.type,
+      name: file.name,
+    };
+  }
+
+  async function sendMessage() {
     if (!me) return;
     if (sending) return;
-    if (!content.trim() && !media) return;
+    if (!content.trim() && pendingFiles.length === 0) return;
 
     setSending(true);
 
     const messageContent = content.trim();
 
-    const { error } = await supabase.from("messages").insert({
-      user_id: me.id,
-      content: messageContent,
-      read_by: [me.id],
-      media_url: media?.url ?? null,
-      media_type: media?.type ?? null,
-      media_name: media?.name ?? null,
-      room_type: selectedRoom === "group" ? "group" : "dm",
-      recipient_id: selectedRoom === "group" ? null : selectedRoom,
-    });
+    if (messageContent) {
+      const { error } = await supabase.from("messages").insert({
+        user_id: me.id,
+        content: messageContent,
+        read_by: [me.id],
+        room_type: selectedRoom === "group" ? "group" : "dm",
+        recipient_id: selectedRoom === "group" ? null : selectedRoom,
+      });
 
-    if (error) {
-      alert("메시지 전송 실패: " + error.message);
-      setSending(false);
-      return;
+      if (error) {
+        alert("메시지 전송 실패: " + error.message);
+        setSending(false);
+        return;
+      }
+    }
+
+    for (const file of pendingFiles) {
+      const media = await uploadOneChatMedia(file);
+      if (!media) continue;
+
+      await supabase.from("messages").insert({
+        user_id: me.id,
+        content: "",
+        read_by: [me.id],
+        media_url: media.url,
+        media_type: media.type,
+        media_name: media.name,
+        room_type: selectedRoom === "group" ? "group" : "dm",
+        recipient_id: selectedRoom === "group" ? null : selectedRoom,
+      });
     }
 
     setContent("");
+    setPendingFiles([]);
     await loadMessages(false);
 
     setTimeout(() => {
       scrollToBottom();
       setSending(false);
     }, 50);
-  }
-
-  async function uploadChatMedia(file: File) {
-    if (!me) return;
-
-    const fileExt = file.name.split(".").pop();
-    const filePath = `${me.id}/${Date.now()}-${crypto.randomUUID()}.${fileExt}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from("chat-media")
-      .upload(filePath, file);
-
-    if (uploadError) {
-      alert("미디어 업로드 실패: " + uploadError.message);
-      return;
-    }
-
-    const { data } = supabase.storage.from("chat-media").getPublicUrl(filePath);
-
-    await sendMessage({
-      url: data.publicUrl,
-      type: file.type,
-      name: file.name,
-    });
   }
 
   async function updateDisplayName(userId: number, displayName: string) {
@@ -1076,16 +1091,61 @@ export default function Home() {
             </div>
 
             <div className="shrink-0 p-4 border-t border-indigo-100 bg-indigo-50/70">
+              {pendingFiles.length > 0 && (
+                <div className="mb-3 flex gap-2 overflow-x-auto">
+                  {pendingFiles.map((file, index) => {
+                    const previewUrl = URL.createObjectURL(file);
+
+                    return (
+                      <div
+                        key={`${file.name}-${index}`}
+                        className="relative w-24 h-24 rounded-xl border bg-white overflow-hidden shrink-0"
+                      >
+                        {file.type.startsWith("image/") ? (
+                          <img
+                            src={previewUrl}
+                            alt=""
+                            className="w-full h-full object-cover"
+                          />
+                        ) : file.type.startsWith("video/") ? (
+                          <video
+                            src={previewUrl}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="p-2 text-xs break-all">
+                            📎 {file.name}
+                          </div>
+                        )}
+
+                        <button
+                          onClick={() =>
+                            setPendingFiles((prev) =>
+                              prev.filter((_, i) => i !== index)
+                            )
+                          }
+                          className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-5 h-5 text-xs"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="flex gap-2 bg-white border border-indigo-100 rounded-2xl p-2 shadow-sm">
                 <label className="cursor-pointer px-3 py-3 rounded-xl hover:bg-indigo-50">
                   📎
                   <input
                     type="file"
+                    multiple
                     accept="image/*,video/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.zip"
                     className="hidden"
                     onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) uploadChatMedia(file);
+                      const files = Array.from(e.target.files ?? []);
+                      setPendingFiles((prev) => [...prev, ...files]);
+                      e.target.value = "";
                     }}
                   />
                 </label>
@@ -1094,18 +1154,7 @@ export default function Home() {
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
                   onFocus={markMessagesAsRead}
-                  onPaste={async (e) => {
-                    const items = e.clipboardData.items;
-                    for (const item of items) {
-                      if (item.type.startsWith("image/")) {
-                        const file = item.getAsFile();
-                        if (file) {
-                          e.preventDefault();
-                          await uploadChatMedia(file);
-                        }
-                      }
-                    }
-                  }}
+                  onPaste={handlePaste}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                       e.preventDefault();
@@ -1121,7 +1170,7 @@ export default function Home() {
                 />
 
                 <button
-                  onClick={() => sendMessage()}
+                  onClick={sendMessage}
                   disabled={sending}
                   className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl px-6 transition"
                 >
