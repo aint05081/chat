@@ -662,7 +662,7 @@ export default function Home() {
     );
 
     return (
-      <div className="mt-1 flex flex-wrap items-center gap-1">
+      <div className="flex w-fit max-w-full flex-wrap items-center gap-1">
         {Object.entries(grouped).map(([emojiName, list]) => {
           const emoji = customEmojis.find((e) => e.name === emojiName);
           const mineReacted = !!me && list.some((r) => r.user_id === me.id);
@@ -700,7 +700,7 @@ export default function Home() {
     if (customEmojis.length === 0) return null;
 
     return (
-      <div className="relative mt-1 hidden items-center gap-1 group-hover:flex">
+      <div className="relative hidden items-center gap-1 group-hover:flex">
         <button
           type="button"
           onClick={(e) => {
@@ -1242,8 +1242,8 @@ export default function Home() {
                         )}
 
                         <div
-                          className={`max-w-[82%] sm:max-w-[70%] ${
-                            mine ? "items-end text-right" : ""
+                          className={`flex max-w-[82%] flex-col sm:max-w-[70%] ${
+                            mine ? "items-end text-right" : "items-start"
                           }`}
                         >
                           {!mine && (
@@ -1253,7 +1253,7 @@ export default function Home() {
                           )}
 
                           <div
-                            className={`rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
+                            className={`inline-block w-fit max-w-full rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap break-words ${
                               mine
                                 ? "bg-indigo-600 text-white rounded-tr-md"
                                 : "bg-slate-100 text-slate-900 rounded-tl-md"
@@ -1266,14 +1266,18 @@ export default function Home() {
                             {renderMedia(m)}
                           </div>
 
-                          <div className={`flex items-center gap-1 ${mine ? "justify-end" : ""}`}>
+                          <div
+                            className={`mt-1 flex w-fit max-w-full items-center gap-1 ${
+                              mine ? "self-end justify-end" : "self-start justify-start"
+                            }`}
+                          >
                             {renderReactions(m.id)}
                             {renderReactionPicker(m)}
                           </div>
 
                           <div
-                            className={`mt-1 flex gap-2 text-xs text-slate-400 ${
-                              mine ? "justify-end" : ""
+                            className={`mt-1 flex w-fit max-w-full gap-2 text-xs text-slate-400 ${
+                              mine ? "self-end justify-end" : "self-start justify-start"
                             }`}
                           >
                             <span>
