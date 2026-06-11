@@ -92,6 +92,7 @@ export default function Home() {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef(true);
+  const notificationOnRef = useRef(notificationOn);
 
   const isAdmin = me?.role === "admin";
 
@@ -109,6 +110,9 @@ export default function Home() {
     return new Map(users.map((u) => [u.id, u]));
   }, [users]);
 
+  const currentRoomMemberCount =
+    selectedRoom === "group" ? activeUsers.length : 2;
+
   useEffect(() => {
     const saved = localStorage.getItem("work-log-user");
     if (saved) setMe(JSON.parse(saved));
@@ -123,6 +127,10 @@ export default function Home() {
 
     loadUsers();
   }, []);
+
+  useEffect(() => {
+    notificationOnRef.current = notificationOn;
+  }, [notificationOn]);
 
   useEffect(() => {
     loadMessages(false);
@@ -264,7 +272,7 @@ export default function Home() {
   }
 
   function showNotification(message: Message) {
-    if (!notificationOn) return;
+    if (!notificationOnRef.current) return;
     if (!("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
 
@@ -761,7 +769,9 @@ export default function Home() {
             <h1 className="text-xl font-bold text-slate-900">
               {selectedRoom === "group"
                 ? "2026 Q3 마케팅 업무 로그"
-                : `${userMap.get(selectedRoom)?.display_name ?? "개인"}님과의 개인 업무 로그`}
+                : `${
+                    userMap.get(selectedRoom)?.display_name ?? "개인"
+                  }님과의 개인 업무 로그`}
             </h1>
             <p className="text-sm text-slate-500">
               {selectedRoom === "group"
@@ -1026,12 +1036,14 @@ export default function Home() {
                               : "bg-slate-100 text-slate-900 rounded-tl-md"
                           }`}
                         >
-                          {m.content && <div>{renderTextWithLinks(m.content)}</div>}
+                          {m.content && (
+                            <div>{renderTextWithLinks(m.content)}</div>
+                          )}
                           {renderMedia(m)}
                         </div>
 
                         <p className="text-xs text-slate-400 mt-1">
-                          읽음 {readCount}/{activeUsers.length} ·{" "}
+                          읽음 {readCount}/{currentRoomMemberCount} ·{" "}
                           {formatTime(m.created_at)}
                         </p>
                       </div>
