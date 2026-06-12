@@ -1614,8 +1614,18 @@ export default function Home() {
       : "대기 중";
 
     return (
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/30 p-3">
-        <div className="max-h-[94vh] w-full max-w-[720px] overflow-y-auto rounded-3xl border border-indigo-100 bg-white p-4 shadow-2xl">
+      <div
+        className="fixed inset-0 z-[9999] flex items-center justify-center p-3"
+        style={{
+          backgroundColor: `rgba(0,0,0,${opacity / 500})`,
+        }}
+      >
+        <div
+          className="max-h-[94vh] w-full max-w-[720px] overflow-y-auto rounded-3xl border border-indigo-100 p-4 shadow-2xl"
+          style={{
+            backgroundColor: `rgba(255,255,255,${opacity / 100})`,
+          }}
+        >
           <div className="mb-4 flex items-start justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-slate-900">오목</h2>
@@ -1660,7 +1670,12 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="mx-auto w-fit rounded-2xl bg-amber-100 p-3 shadow-inner">
+          <div
+            className="mx-auto w-fit rounded-2xl p-3 shadow-inner"
+            style={{
+              backgroundColor: `rgba(254,243,199,${opacity / 100})`,
+            }}
+          >
             <div
               className="grid gap-[2px]"
               style={{
