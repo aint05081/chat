@@ -1568,7 +1568,7 @@ export default function Home() {
   }
 
   function renderOmokInvite(message: Message) {
-    const match = message.content.match(/__OMOK_INVITE__:(\\d+)/);
+    const match = message.content.match(/__OMOK_INVITE__:(\d+)/);
     if (!match) return null;
 
     const gameId = Number(match[1]);
