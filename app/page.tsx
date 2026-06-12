@@ -205,11 +205,23 @@ export default function Home() {
 
     const firstUnread = messages.find((m) => {
       const readBy = m.read_by ?? [];
-      return m.user_id !== me.id && !readBy.includes(me.id);
+
+      if (m.user_id === me.id) return false;
+      if (readBy.includes(me.id)) return false;
+
+      if (selectedRoom === "group") {
+        return m.room_type === "group";
+      }
+
+      return (
+        m.room_type === "dm" &&
+        ((m.user_id === me.id && m.recipient_id === selectedRoom) ||
+          (m.user_id === selectedRoom && m.recipient_id === me.id))
+      );
     });
 
     return firstUnread?.id ?? null;
-  }, [messages, me?.id]);
+  }, [messages, me?.id, selectedRoom]);
 
   useEffect(() => {
     const saved = localStorage.getItem("work-log-user");
@@ -234,6 +246,36 @@ export default function Home() {
   }, [notificationOn]);
 
   useEffect(() => {
+    if (!me) return;
+    if (messages.length === 0) return;
+    if (!isPageVisible()) return;
+
+    const timer = setTimeout(() => {
+      markCurrentRoomMessagesAsRead(messages, false);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [messages.length, selectedRoom, me?.id]);
+
+  useEffect(() => {
+    if (!me) return;
+
+    const handleFocusOrVisible = () => {
+      if (isPageVisible()) {
+        markCurrentRoomMessagesAsRead(messages, false);
+      }
+    };
+
+    window.addEventListener("focus", handleFocusOrVisible);
+    document.addEventListener("visibilitychange", handleFocusOrVisible);
+
+    return () => {
+      window.removeEventListener("focus", handleFocusOrVisible);
+      document.removeEventListener("visibilitychange", handleFocusOrVisible);
+    };
+  }, [messages.length, selectedRoom, me?.id]);
+
+  useEffect(() => {
     loadMessages(false);
     loadAllMessagesForBadges();
     loadCustomEmojis();
@@ -256,6 +298,22 @@ export default function Home() {
                   newMessage.recipient_id === selectedRoom) ||
                   (newMessage.user_id === selectedRoom &&
                     newMessage.recipient_id === me.id));
+
+          if (
+            belongsToCurrentRoom &&
+            me &&
+            newMessage.user_id !== me.id &&
+            isPageVisible()
+          ) {
+            await supabase
+              .from("messages")
+              .update({
+                read_by: Array.from(
+                  new Set([...(newMessage.read_by ?? []), me.id])
+                ),
+              })
+              .eq("id", newMessage.id);
+          }
 
           await loadAllMessagesForBadges();
 
@@ -418,6 +476,75 @@ export default function Home() {
     });
   }
 
+  function isMessageInCurrentRoom(message: Message) {
+    if (!me) return false;
+
+    if (selectedRoom === "group") {
+      return message.room_type === "group";
+    }
+
+    return (
+      message.room_type === "dm" &&
+      ((message.user_id === me.id && message.recipient_id === selectedRoom) ||
+        (message.user_id === selectedRoom && message.recipient_id === me.id))
+    );
+  }
+
+  function isPageVisible() {
+    if (typeof document === "undefined") return false;
+    return document.visibilityState === "visible";
+  }
+
+  async function markCurrentRoomMessagesAsRead(
+    targetMessages: Message[] = messages,
+    shouldScrollBottom = false
+  ) {
+    if (!me) return;
+    if (!isPageVisible()) return;
+
+    const unreadMessages = targetMessages.filter((m) => {
+      const readBy = m.read_by ?? [];
+      return (
+        isMessageInCurrentRoom(m) &&
+        m.user_id !== me.id &&
+        !readBy.includes(me.id)
+      );
+    });
+
+    if (unreadMessages.length === 0) return;
+
+    for (const message of unreadMessages) {
+      const nextReadBy = Array.from(
+        new Set([...(message.read_by ?? []), me.id])
+      );
+
+      await supabase
+        .from("messages")
+        .update({ read_by: nextReadBy })
+        .eq("id", message.id);
+    }
+
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (!unreadMessages.some((unread) => unread.id === m.id)) {
+          return m;
+        }
+
+        return {
+          ...m,
+          read_by: Array.from(new Set([...(m.read_by ?? []), me.id])),
+        };
+      })
+    );
+
+    await loadAllMessagesForBadges();
+
+    if (shouldScrollBottom || isNearBottomRef.current) {
+      setShowScrollButton(false);
+      setTimeout(scrollToBottom, 80);
+    }
+  }
+
   function getUnreadCount(room: "group" | number) {
     if (!me) return 0;
 
@@ -459,8 +586,26 @@ export default function Home() {
 
     const firstUnread = loadedMessages.find((m) => {
       const readBy = m.read_by ?? [];
-      return m.user_id !== me.id && !readBy.includes(me.id);
+
+      if (m.user_id === me.id) return false;
+      if (readBy.includes(me.id)) return false;
+
+      if (selectedRoom === "group") {
+        return m.room_type === "group";
+      }
+
+      return (
+        m.room_type === "dm" &&
+        ((m.user_id === me.id && m.recipient_id === selectedRoom) ||
+          (m.user_id === selectedRoom && m.recipient_id === me.id))
+      );
     });
+
+    if (firstUnread && isPageVisible()) {
+      markCurrentRoomMessagesAsRead(loadedMessages, false);
+      scrollToBottom();
+      return;
+    }
 
     setTimeout(() => {
       if (firstUnread) {
@@ -865,38 +1010,7 @@ export default function Home() {
   }
 
   async function markMessagesAsRead() {
-    if (!me) return;
-
-    const unreadMessages = messages.filter((m) => {
-      const readBy = m.read_by ?? [];
-      return !readBy.includes(me.id);
-    });
-
-    for (const message of unreadMessages) {
-      const nextReadBy = Array.from(
-        new Set([...(message.read_by ?? []), me.id])
-      );
-
-      await supabase
-        .from("messages")
-        .update({ read_by: nextReadBy })
-        .eq("id", message.id);
-    }
-
-    await loadAllMessagesForBadges();
-
-    setMessages((prev) =>
-      prev.map((m) => ({
-        ...m,
-        read_by: Array.from(new Set([...(m.read_by ?? []), me.id])),
-      }))
-    );
-
-    setShowScrollButton(false);
-
-    setTimeout(() => {
-      scrollToBottom();
-    }, 200);
+    await markCurrentRoomMessagesAsRead(messages, true);
   }
 
   async function login() {
