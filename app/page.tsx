@@ -756,6 +756,373 @@ export default function Home() {
     );
   }
 
+  async function loadMessages(loadMore = false) {
+    if (loadMore) setLoadingMore(true);
+
+    const currentCount = loadMore ? messages.length : 0;
+
+    let query = supabase
+      .from("messages")
+      .select("*, users(*)")
+      .order("created_at", { ascending: false })
+      .range(currentCount, currentCount + PAGE_SIZE - 1);
+
+    if (selectedRoom === "group") {
+      query = query.eq("room_type", "group");
+    } else if (me) {
+      query = query
+        .eq("room_type", "dm")
+        .or(
+          `and(user_id.eq.${me.id},recipient_id.eq.${selectedRoom}),and(user_id.eq.${selectedRoom},recipient_id.eq.${me.id})`
+        );
+    }
+
+    const { data } = await query;
+    const ordered = (data ?? []).reverse();
+
+    if (loadMore) {
+      const scrollEl = chatScrollRef.current;
+      const previousScrollHeight = scrollEl?.scrollHeight ?? 0;
+
+      setMessages((prev) => [...ordered, ...prev]);
+
+      setTimeout(() => {
+        if (scrollEl) {
+          const nextScrollHeight = scrollEl.scrollHeight;
+          scrollEl.scrollTop = nextScrollHeight - previousScrollHeight;
+        }
+      }, 0);
+    } else {
+      setMessages(ordered);
+      scrollAfterMessagesLoaded(ordered);
+    }
+
+    setHasMoreMessages((data ?? []).length === PAGE_SIZE);
+    setLoadingMore(false);
+  }
+
+  async function markMessagesAsRead() {
+    if (!me) return;
+
+    const unreadMessages = messages.filter((m) => {
+      const readBy = m.read_by ?? [];
+      return !readBy.includes(me.id);
+    });
+
+    for (const message of unreadMessages) {
+      const nextReadBy = Array.from(
+        new Set([...(message.read_by ?? []), me.id])
+      );
+
+      await supabase
+        .from("messages")
+        .update({ read_by: nextReadBy })
+        .eq("id", message.id);
+    }
+
+    await loadAllMessagesForBadges();
+
+    setMessages((prev) =>
+      prev.map((m) => ({
+        ...m,
+        read_by: Array.from(new Set([...(m.read_by ?? []), me.id])),
+      }))
+    );
+
+    setShowScrollButton(false);
+
+    setTimeout(() => {
+      scrollToBottom();
+    }, 200);
+  }
+
+  async function login() {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", email.trim())
+      .eq("password", password.trim())
+      .single();
+
+    if (error || !data) {
+      alert("이메일 또는 비밀번호가 틀렸어.");
+      return;
+    }
+
+    if (data.is_active === false) {
+      alert("비활성화된 계정이야.");
+      return;
+    }
+
+    setMe(data);
+    localStorage.setItem("work-log-user", JSON.stringify(data));
+
+    setTimeout(() => loadMessages(false), 100);
+  }
+
+  function logout() {
+    setMe(null);
+    setAdminOpen(false);
+    localStorage.removeItem("work-log-user");
+  }
+
+  async function uploadOneChatMedia(file: File) {
+    if (!me) return null;
+
+    const fileExt = file.name.split(".").pop();
+    const filePath = `${me.id}/${Date.now()}-${crypto.randomUUID()}.${fileExt}`;
+
+    const { error } = await supabase.storage
+      .from("chat-media")
+      .upload(filePath, file);
+
+    if (error) {
+      alert("미디어 업로드 실패: " + error.message);
+      return null;
+    }
+
+    const { data } = supabase.storage.from("chat-media").getPublicUrl(filePath);
+
+    return {
+      url: data.publicUrl,
+      type: file.type,
+      name: file.name,
+    };
+  }
+
+  async function sendMessage() {
+    if (!me) return;
+    if (sending) return;
+    if (!content.trim() && pendingFiles.length === 0) return;
+
+    setSending(true);
+
+    const messageContent = content.trim();
+
+    if (messageContent) {
+      const { error } = await supabase.from("messages").insert({
+        user_id: me.id,
+        content: messageContent,
+        read_by: [me.id],
+        room_type: selectedRoom === "group" ? "group" : "dm",
+        recipient_id: selectedRoom === "group" ? null : selectedRoom,
+        reply_to_id: replyTo?.id ?? null,
+      });
+
+      if (error) {
+        alert("메시지 전송 실패: " + error.message);
+        setSending(false);
+        return;
+      }
+    }
+
+    for (const file of pendingFiles) {
+      const media = await uploadOneChatMedia(file);
+      if (!media) continue;
+
+      await supabase.from("messages").insert({
+        user_id: me.id,
+        content: "",
+        read_by: [me.id],
+        media_url: media.url,
+        media_type: media.type,
+        media_name: media.name,
+        room_type: selectedRoom === "group" ? "group" : "dm",
+        recipient_id: selectedRoom === "group" ? null : selectedRoom,
+        reply_to_id: replyTo?.id ?? null,
+      });
+    }
+
+    setContent("");
+    setPendingFiles([]);
+    setReplyTo(null);
+    await loadMessages(false);
+    await loadAllMessagesForBadges();
+
+    setTimeout(() => {
+      scrollToBottom();
+      setSending(false);
+    }, 80);
+  }
+
+  async function updateDisplayName(userId: number, displayName: string) {
+    if (!isAdmin || !displayName.trim()) return;
+
+    const { error } = await supabase
+      .from("users")
+      .update({ display_name: displayName.trim() })
+      .eq("id", userId);
+
+    if (error) {
+      alert("이름 변경 실패: " + error.message);
+      return;
+    }
+
+    await loadUsers();
+    await loadMessages(false);
+
+    if (me?.id === userId) {
+      const updatedMe = { ...me, display_name: displayName.trim() };
+      setMe(updatedMe);
+      localStorage.setItem("work-log-user", JSON.stringify(updatedMe));
+    }
+  }
+
+  async function updatePassword(userId: number, newPasswordValue: string) {
+    if (!isAdmin || !newPasswordValue.trim()) return;
+
+    const { error } = await supabase
+      .from("users")
+      .update({ password: newPasswordValue.trim() })
+      .eq("id", userId);
+
+    if (error) {
+      alert("비밀번호 변경 실패: " + error.message);
+      return;
+    }
+
+    await loadUsers();
+  }
+
+  async function toggleActive(user: User) {
+    if (!isAdmin) return;
+
+    if (user.role === "admin") {
+      alert("관리자 계정은 비활성화하지 않는 게 좋아.");
+      return;
+    }
+
+    await supabase
+      .from("users")
+      .update({ is_active: user.is_active === false ? true : false })
+      .eq("id", user.id);
+
+    await loadUsers();
+  }
+
+  async function deleteUser(user: User) {
+    if (!isAdmin) return;
+
+    if (user.role === "admin") {
+      alert("관리자 계정은 삭제하지 마.");
+      return;
+    }
+
+    const ok = confirm(`${user.display_name} 계정을 삭제할까?`);
+    if (!ok) return;
+
+    await supabase.from("users").delete().eq("id", user.id);
+    await loadUsers();
+    await loadMessages(false);
+  }
+
+  async function addUser() {
+    if (!isAdmin) return;
+
+    if (!newEmail.trim() || !newPassword.trim() || !newName.trim()) {
+      alert("이메일, 비밀번호, 표시명을 모두 입력해.");
+      return;
+    }
+
+    const { error } = await supabase.from("users").insert({
+      email: newEmail.trim(),
+      password: newPassword.trim(),
+      display_name: newName.trim(),
+      role: "member",
+      is_active: true,
+    });
+
+    if (error) {
+      alert("멤버 추가 실패: " + error.message);
+      return;
+    }
+
+    setNewEmail("");
+    setNewPassword("");
+    setNewName("");
+    await loadUsers();
+  }
+
+  async function uploadAvatar(file: File, targetUserId?: number) {
+    if (!me) return;
+
+    const userId = targetUserId ?? me.id;
+
+    if (targetUserId && targetUserId !== me.id && !isAdmin) {
+      alert("관리자만 다른 사람 사진을 변경할 수 있어.");
+      return;
+    }
+
+    const fileExt = file.name.split(".").pop();
+    const filePath = `${userId}/avatar.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("avatars")
+      .upload(filePath, file, { upsert: true });
+
+    if (uploadError) {
+      alert("이미지 업로드 실패: " + uploadError.message);
+      return;
+    }
+
+    const { data } = supabase.storage.from("avatars").getPublicUrl(filePath);
+    const avatarUrl = `${data.publicUrl}?t=${Date.now()}`;
+
+    const { error: updateError } = await supabase
+      .from("users")
+      .update({ avatar_url: avatarUrl })
+      .eq("id", userId);
+
+    if (updateError) {
+      alert("DB 저장 실패: " + updateError.message);
+      return;
+    }
+
+    if (me.id === userId) {
+      const updatedMe = { ...me, avatar_url: avatarUrl };
+      setMe(updatedMe);
+      localStorage.setItem("work-log-user", JSON.stringify(updatedMe));
+    }
+
+    await loadUsers();
+    await loadMessages(false);
+  }
+
+  function renderMedia(message: Message) {
+    if (!message.media_url) return null;
+
+    if (message.media_type?.startsWith("image/")) {
+      return (
+        <img
+          src={message.media_url}
+          alt={message.media_name ?? ""}
+          className="mt-2 max-w-[280px] rounded-2xl border object-cover"
+        />
+      );
+    }
+
+    if (message.media_type?.startsWith("video/")) {
+      return (
+        <video
+          src={message.media_url}
+          controls
+          className="mt-2 max-w-[320px] rounded-2xl border"
+        />
+      );
+    }
+
+    return (
+      <a
+        href={message.media_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-2 block rounded-2xl border bg-white/70 px-4 py-3 text-sm underline"
+      >
+        📎 {message.media_name ?? "파일 열기"}
+      </a>
+    );
+  }
+
   function renderReplyPreview(message: Message, mine: boolean) {
     if (!message.reply_to_id) return null;
 
@@ -1618,4 +1985,3 @@ export default function Home() {
     </main>
   );
 }
-
