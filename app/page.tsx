@@ -535,10 +535,15 @@ export default function Home() {
   }
 
   async function loadMessageReactions() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("message_reactions")
-      .select("*, users(*)")
+      .select("*")
       .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("반응 불러오기 실패:", error.message);
+      return;
+    }
 
     setMessageReactions(data ?? []);
   }
@@ -633,13 +638,26 @@ export default function Home() {
     );
 
     if (existing) {
-      await supabase.from("message_reactions").delete().eq("id", existing.id);
+      const { error } = await supabase
+        .from("message_reactions")
+        .delete()
+        .eq("id", existing.id);
+
+      if (error) {
+        alert("반응 삭제 실패: " + error.message);
+        return;
+      }
     } else {
-      await supabase.from("message_reactions").insert({
+      const { error } = await supabase.from("message_reactions").insert({
         message_id: messageId,
         user_id: me.id,
         emoji_name: emojiName,
       });
+
+      if (error) {
+        alert("반응 추가 실패: " + error.message);
+        return;
+      }
     }
 
     await loadMessageReactions();
@@ -1945,3 +1963,4 @@ export default function Home() {
     </main>
   );
 }
+
