@@ -45,6 +45,23 @@ type Message = {
 
 const PAGE_SIZE = 50;
 
+const DEFAULT_REACTIONS = [
+  "👍",
+  "❤️",
+  "😂",
+  "🔥",
+  "✅",
+  "❌",
+  "👀",
+  "🙏",
+  "🎉",
+  "👏",
+  "⭐",
+  "💯",
+  "😭",
+  "😆",
+];
+
 function isActuallyOnline(user: User, onlineIds: number[]) {
   return onlineIds.includes(user.id);
 }
@@ -682,7 +699,7 @@ export default function Home() {
     return (
       <div className="flex w-fit max-w-full flex-nowrap gap-1 overflow-x-auto">
         {Object.entries(grouped).map(([emojiName, list]) => {
-          const emoji = customEmojis.find((e) => e.name === emojiName);
+          const customEmoji = customEmojis.find((e) => e.name === emojiName);
           const mineReacted = !!me && list.some((r) => r.user_id === me.id);
 
           return (
@@ -692,20 +709,21 @@ export default function Home() {
               onClick={() => toggleReaction(messageId, emojiName)}
               className={`flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-xs shadow-sm ${
                 mineReacted
-                  ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                  : "border-slate-200 bg-white text-slate-600"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-indigo-50"
               }`}
+              title={customEmoji ? `:${emojiName}:` : emojiName}
             >
-              {emoji ? (
+              {customEmoji ? (
                 <img
-                  src={emoji.image_url}
+                  src={customEmoji.image_url}
                   alt={`:${emojiName}:`}
-                  className="h-4 w-4 rounded object-contain"
+                  className="h-5 w-5 rounded object-contain"
                 />
               ) : (
-                <span>:{emojiName}:</span>
+                <span className="text-base leading-none">{emojiName}</span>
               )}
-              <span>{list.length}</span>
+              <span className="font-semibold">{list.length}</span>
             </button>
           );
         })}
@@ -714,7 +732,8 @@ export default function Home() {
   }
 
   function renderReactionPicker(message: Message) {
-    if (customEmojis.length === 0) return null;
+    const mine = me?.id === message.user_id;
+    const hasCustomEmojis = customEmojis.length > 0;
 
     return (
       <div className="relative flex shrink-0 items-start gap-1">
@@ -733,7 +752,31 @@ export default function Home() {
         </button>
 
         {openReactionPickerFor === message.id && (
-          <div className="absolute left-8 top-0 z-50 flex max-w-[280px] flex-nowrap gap-1 overflow-x-auto rounded-2xl border border-indigo-100 bg-white p-2 shadow-xl">
+          <div
+            className={`absolute top-0 z-50 flex max-w-[320px] flex-nowrap gap-1 overflow-x-auto rounded-2xl border border-indigo-100 bg-white p-2 shadow-xl ${
+              mine ? "right-8" : "left-8"
+            }`}
+          >
+            {DEFAULT_REACTIONS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleReaction(message.id, emoji);
+                  setOpenReactionPickerFor(null);
+                }}
+                title={emoji}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-lg hover:bg-indigo-50"
+              >
+                {emoji}
+              </button>
+            ))}
+
+            {hasCustomEmojis && (
+              <div className="mx-1 h-8 w-px shrink-0 bg-slate-200" />
+            )}
+
             {customEmojis.map((emoji) => (
               <button
                 key={emoji.id}
@@ -744,7 +787,7 @@ export default function Home() {
                   setOpenReactionPickerFor(null);
                 }}
                 title={`:${emoji.name}:`}
-                className="rounded-lg p-1 hover:bg-indigo-50"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg hover:bg-indigo-50"
               >
                 <img
                   src={emoji.image_url}
