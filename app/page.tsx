@@ -680,7 +680,7 @@ export default function Home() {
     );
 
     return (
-      <div className="mt-2 flex flex-wrap gap-1">
+      <div className="flex w-fit max-w-full flex-nowrap gap-1 overflow-x-auto">
         {Object.entries(grouped).map(([emojiName, list]) => {
           const emoji = customEmojis.find((e) => e.name === emojiName);
           const mineReacted = !!me && list.some((r) => r.user_id === me.id);
@@ -690,7 +690,7 @@ export default function Home() {
               key={emojiName}
               type="button"
               onClick={() => toggleReaction(messageId, emojiName)}
-              className={`flex items-center gap-1 rounded-full border px-2 py-1 text-xs ${
+              className={`flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-xs shadow-sm ${
                 mineReacted
                   ? "border-indigo-300 bg-indigo-50 text-indigo-700"
                   : "border-slate-200 bg-white text-slate-600"
@@ -717,7 +717,7 @@ export default function Home() {
     if (customEmojis.length === 0) return null;
 
     return (
-      <div className="relative flex items-center gap-1">
+      <div className="relative flex shrink-0 items-start gap-1">
         <button
           type="button"
           onClick={(e) => {
@@ -726,14 +726,14 @@ export default function Home() {
               current === message.id ? null : message.id
             );
           }}
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-sm text-slate-500 shadow-sm hover:bg-indigo-50 hover:text-indigo-600"
+          className="mt-1 flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-sm text-slate-500 shadow-sm hover:bg-indigo-50 hover:text-indigo-600"
           title="반응 추가"
         >
           +
         </button>
 
         {openReactionPickerFor === message.id && (
-          <div className="absolute bottom-8 left-0 z-50 flex max-w-[260px] flex-wrap gap-1 rounded-2xl border border-indigo-100 bg-white p-2 shadow-xl">
+          <div className="absolute left-8 top-0 z-50 flex max-w-[280px] flex-nowrap gap-1 overflow-x-auto rounded-2xl border border-indigo-100 bg-white p-2 shadow-xl">
             {customEmojis.map((emoji) => (
               <button
                 key={emoji.id}
@@ -1637,17 +1637,25 @@ export default function Home() {
                           )}
 
                           <div
-                            className={`inline-block w-fit max-w-full rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap break-words ${
-                              mine
-                                ? "bg-indigo-600 text-white rounded-tr-md"
-                                : "bg-slate-100 text-slate-900 rounded-tl-md"
+                            className={`flex items-start gap-2 ${
+                              mine ? "flex-row-reverse self-end" : "flex-row self-start"
                             }`}
                           >
-                            {renderReplyPreview(m, mine)}
-                            {m.content && (
-                              <div>{renderTextWithLinksAndEmojis(m.content, customEmojis)}</div>
-                            )}
-                            {renderMedia(m)}
+                            <div
+                              className={`inline-block w-fit max-w-full rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap break-words ${
+                                mine
+                                  ? "bg-indigo-600 text-white rounded-tr-md"
+                                  : "bg-slate-100 text-slate-900 rounded-tl-md"
+                              }`}
+                            >
+                              {renderReplyPreview(m, mine)}
+                              {m.content && (
+                                <div>{renderTextWithLinksAndEmojis(m.content, customEmojis)}</div>
+                              )}
+                              {renderMedia(m)}
+                            </div>
+
+                            {renderReactionPicker(m)}
                           </div>
 
                           <div
@@ -1656,12 +1664,11 @@ export default function Home() {
                             }`}
                           >
                             {renderReactions(m.id)}
-                            {renderReactionPicker(m)}
                           </div>
 
                           <div
                             className={`mt-1 flex w-fit max-w-full gap-2 text-xs text-slate-400 ${
-                              mine ? "justify-end" : ""
+                              mine ? "self-end justify-end" : "self-start justify-start"
                             }`}
                           >
                             <span>
