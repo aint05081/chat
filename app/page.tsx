@@ -267,13 +267,19 @@ export default function Home() {
     if (!me) return;
     if (messages.length === 0) return;
     if (!isPageVisible()) return;
+    if (!hasUnreadInCurrentRoom(messages)) return;
 
     const timer = setTimeout(() => {
-      markCurrentRoomMessagesAsRead(messages, false);
-    }, 300);
+      markCurrentRoomMessagesAsRead(messages, isNearBottomRef.current);
+    }, 250);
 
     return () => clearTimeout(timer);
-  }, [messages.length, selectedRoom, me?.id]);
+  }, [
+    messages.length,
+    selectedRoom,
+    me?.id,
+    messages.map((m) => `${m.id}:${(m.read_by ?? []).join(",")}`).join("|"),
+  ]);
 
   useEffect(() => {
     if (!me) return;
@@ -525,6 +531,20 @@ export default function Home() {
     return document.visibilityState === "visible";
   }
 
+  function hasUnreadInCurrentRoom(targetMessages: Message[] = messages) {
+    if (!me) return false;
+
+    return targetMessages.some((m) => {
+      const readBy = m.read_by ?? [];
+
+      return (
+        isMessageInCurrentRoom(m) &&
+        m.user_id !== me.id &&
+        !readBy.includes(me.id)
+      );
+    });
+  }
+
   async function markCurrentRoomMessagesAsRead(
     targetMessages: Message[] = messages,
     shouldScrollBottom = false
@@ -555,6 +575,19 @@ export default function Home() {
     }
 
     setMessages((prev) =>
+      prev.map((m) => {
+        if (!unreadMessages.some((unread) => unread.id === m.id)) {
+          return m;
+        }
+
+        return {
+          ...m,
+          read_by: Array.from(new Set([...(m.read_by ?? []), me.id])),
+        };
+      })
+    );
+
+    setAllMessagesForBadges((prev) =>
       prev.map((m) => {
         if (!unreadMessages.some((unread) => unread.id === m.id)) {
           return m;
@@ -614,6 +647,11 @@ export default function Home() {
       return;
     }
 
+    if (isPageVisible() && hasUnreadInCurrentRoom(loadedMessages)) {
+      markCurrentRoomMessagesAsRead(loadedMessages, true);
+      return;
+    }
+
     const firstUnread = loadedMessages.find((m) => {
       const readBy = m.read_by ?? [];
 
@@ -630,12 +668,6 @@ export default function Home() {
           (m.user_id === selectedRoom && m.recipient_id === me.id))
       );
     });
-
-    if (firstUnread && isPageVisible()) {
-      markCurrentRoomMessagesAsRead(loadedMessages, false);
-      scrollToBottom();
-      return;
-    }
 
     setTimeout(() => {
       if (firstUnread) {
@@ -654,7 +686,7 @@ export default function Home() {
       }
 
       scrollToBottom();
-    }, 200);
+    }, 180);
   }
 
   function scrollToMessage(messageId: number) {
@@ -1615,18 +1647,18 @@ export default function Home() {
 
     return (
       <div
-        className="fixed inset-0 z-[9999] flex items-center justify-center p-3"
+        className="fixed inset-0 z-[9999] flex items-start justify-center overflow-y-auto p-2 sm:items-center sm:p-3"
         style={{
           backgroundColor: `rgba(0,0,0,${opacity / 500})`,
         }}
       >
         <div
-          className="max-h-[94vh] w-full max-w-[720px] overflow-y-auto rounded-3xl border border-indigo-100 p-4 shadow-2xl"
+          className="my-2 max-h-[96dvh] w-full max-w-[720px] overflow-y-auto rounded-3xl border border-indigo-100 p-3 shadow-2xl sm:my-0 sm:p-4"
           style={{
             backgroundColor: `rgba(255,255,255,${opacity / 100})`,
           }}
         >
-          <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-lg font-bold text-slate-900">오목</h2>
               <p className="text-xs text-slate-500">
@@ -1649,7 +1681,7 @@ export default function Home() {
               </p>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               {currentGame && (
                 <button
                   type="button"
@@ -1671,13 +1703,13 @@ export default function Home() {
           </div>
 
           <div
-            className="mx-auto w-fit rounded-2xl p-3 shadow-inner"
+            className="mx-auto max-w-full overflow-x-auto rounded-2xl p-2 shadow-inner sm:p-3"
             style={{
               backgroundColor: `rgba(254,243,199,${opacity / 100})`,
             }}
           >
             <div
-              className="grid gap-[2px]"
+              className="grid w-fit gap-px sm:gap-[2px]"
               style={{
                 gridTemplateColumns: `repeat(${OMOK_SIZE}, minmax(0, 1fr))`,
               }}
@@ -1688,14 +1720,14 @@ export default function Home() {
                     key={`${row}-${col}`}
                     type="button"
                     onClick={() => makeOmokMove(row, col)}
-                    className="flex h-7 w-7 items-center justify-center rounded bg-amber-200 hover:bg-amber-300 sm:h-9 sm:w-9"
+                    className="flex h-[19px] w-[19px] shrink-0 items-center justify-center rounded bg-amber-200 hover:bg-amber-300 sm:h-9 sm:w-9"
                     title={`${row + 1}, ${col + 1}`}
                   >
                     {cell === "black" && (
-                      <span className="h-5 w-5 rounded-full bg-slate-950 shadow sm:h-7 sm:w-7" />
+                      <span className="h-3.5 w-3.5 rounded-full bg-slate-950 shadow sm:h-7 sm:w-7" />
                     )}
                     {cell === "white" && (
-                      <span className="h-5 w-5 rounded-full border border-slate-300 bg-white shadow sm:h-7 sm:w-7" />
+                      <span className="h-3.5 w-3.5 rounded-full border border-slate-300 bg-white shadow sm:h-7 sm:w-7" />
                     )}
                   </button>
                 ))
