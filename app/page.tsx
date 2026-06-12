@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import EmojiPicker from "emoji-picker-react";
 import { supabase } from "@/lib/supabase";
 
 type User = {
@@ -733,7 +734,6 @@ export default function Home() {
 
   function renderReactionPicker(message: Message) {
     const mine = me?.id === message.user_id;
-    const hasCustomEmojis = customEmojis.length > 0;
 
     return (
       <div className="relative flex shrink-0 items-start gap-1">
@@ -753,49 +753,66 @@ export default function Home() {
 
         {openReactionPickerFor === message.id && (
           <div
-            className={`absolute top-0 z-50 flex max-w-[320px] flex-nowrap gap-1 overflow-x-auto rounded-2xl border border-indigo-100 bg-white p-2 shadow-xl ${
-              mine ? "right-8" : "left-8"
+            className={`fixed top-24 z-[9999] rounded-2xl border border-indigo-100 bg-white p-3 shadow-2xl ${
+              mine ? "right-4" : "left-4"
             }`}
+            onClick={(e) => e.stopPropagation()}
           >
-            {DEFAULT_REACTIONS.map((emoji) => (
-              <button
-                key={emoji}
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleReaction(message.id, emoji);
-                  setOpenReactionPickerFor(null);
-                }}
-                title={emoji}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-lg hover:bg-indigo-50"
-              >
-                {emoji}
-              </button>
-            ))}
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold text-slate-500">
+                반응 추가
+              </p>
 
-            {hasCustomEmojis && (
-              <div className="mx-1 h-8 w-px shrink-0 bg-slate-200" />
+              <button
+                type="button"
+                onClick={() => setOpenReactionPickerFor(null)}
+                className="rounded-full px-2 py-1 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                닫기
+              </button>
+            </div>
+
+            {customEmojis.length > 0 && (
+              <div className="mb-2 border-b border-slate-100 pb-2">
+                <p className="mb-2 px-1 text-xs font-semibold text-slate-500">
+                  커스텀 이모티콘
+                </p>
+
+                <div className="flex max-w-[350px] gap-1 overflow-x-auto">
+                  {customEmojis.map((emoji) => (
+                    <button
+                      key={emoji.id}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleReaction(message.id, emoji.name);
+                        setOpenReactionPickerFor(null);
+                      }}
+                      title={`:${emoji.name}:`}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg hover:bg-indigo-50"
+                    >
+                      <img
+                        src={emoji.image_url}
+                        alt={emoji.name}
+                        className="h-6 w-6 rounded object-contain"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
 
-            {customEmojis.map((emoji) => (
-              <button
-                key={emoji.id}
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleReaction(message.id, emoji.name);
-                  setOpenReactionPickerFor(null);
-                }}
-                title={`:${emoji.name}:`}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg hover:bg-indigo-50"
-              >
-                <img
-                  src={emoji.image_url}
-                  alt={emoji.name}
-                  className="h-6 w-6 rounded object-contain"
-                />
-              </button>
-            ))}
+            <EmojiPicker
+              width={350}
+              height={420}
+              searchDisabled={false}
+              skinTonesDisabled
+              previewConfig={{ showPreview: false }}
+              onEmojiClick={(emojiData) => {
+                toggleReaction(message.id, emojiData.emoji);
+                setOpenReactionPickerFor(null);
+              }}
+            />
           </div>
         )}
       </div>
