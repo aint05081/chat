@@ -1429,7 +1429,7 @@ export default function Home() {
 
     await supabase.from("messages").insert({
       user_id: me.id,
-      content: `🎮 오목 초대\\n__OMOK_INVITE__:${data.id}`,
+      content: `🎮 오목 초대\n__OMOK_INVITE__:${data.id}`,
       read_by: [me.id],
       room_type: selectedRoom === "group" ? "group" : "dm",
       recipient_id: selectedRoom === "group" ? null : selectedRoom,
@@ -2258,9 +2258,10 @@ export default function Home() {
                               }`}
                             >
                               {renderReplyPreview(m, mine)}
-                              {m.content && (
-                                <div>{renderTextWithLinksAndEmojis(m.content, customEmojis)}</div>
-                              )}
+                              {renderOmokInvite(m) ||
+                                (m.content && !m.content.includes("__OMOK_INVITE__") && (
+                                  <div>{renderTextWithLinksAndEmojis(m.content, customEmojis)}</div>
+                                ))}
                               {renderMedia(m)}
                             </div>
 
