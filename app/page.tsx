@@ -128,6 +128,9 @@ export default function Home() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [openReactionPickerFor, setOpenReactionPickerFor] = useState<number | null>(
+    null
+  );
 
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
