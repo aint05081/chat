@@ -32,12 +32,13 @@ type MessageReaction = {
 type OmokGame = {
   id: number;
   room_key: string;
+  creator_id: number;
   player_black?: number | null;
   player_white?: number | null;
   board: string[][];
   turn: "black" | "white";
   winner?: "black" | "white" | null;
-  status: "playing" | "finished";
+  status: "waiting" | "playing" | "finished";
   created_at?: string;
 };
 
@@ -1301,7 +1302,7 @@ export default function Home() {
       return "group";
     }
 
-    const ids = [me.id, selectedRoom].sort((a, b) => Number(a) - Number(b));
+    const ids = [Number(me.id), Number(selectedRoom)].sort((a, b) => a - b);
     return `dm-${ids[0]}-${ids[1]}`;
   }
 
@@ -1374,7 +1375,7 @@ export default function Home() {
       .from("games")
       .select("*")
       .eq("room_key", roomKey)
-      .eq("status", "playing")
+      .in("status", ["waiting", "playing"])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -1382,7 +1383,7 @@ export default function Home() {
     setCurrentGame(data ?? null);
   }
 
-  async function startOrJoinOmokGame() {
+  async function createOmokInvite() {
     if (!me || gameLoading) return;
 
     setGameLoading(true);
@@ -1393,27 +1394,13 @@ export default function Home() {
       .from("games")
       .select("*")
       .eq("room_key", roomKey)
-      .eq("status", "playing")
+      .in("status", ["waiting", "playing"])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (existing) {
-      const game = existing as OmokGame;
-
-      if (!game.player_black && game.player_white !== me.id) {
-        await supabase
-          .from("games")
-          .update({ player_black: me.id })
-          .eq("id", game.id);
-      } else if (!game.player_white && game.player_black !== me.id) {
-        await supabase
-          .from("games")
-          .update({ player_white: me.id })
-          .eq("id", game.id);
-      }
-
-      await loadCurrentGame();
+      setCurrentGame(existing);
       setGameOpen(true);
       setGameLoading(false);
       return;
@@ -1423,23 +1410,80 @@ export default function Home() {
       .from("games")
       .insert({
         room_key: roomKey,
+        creator_id: me.id,
         player_black: me.id,
         player_white: null,
         board: makeEmptyOmokBoard(),
         turn: "black",
         winner: null,
-        status: "playing",
+        status: "waiting",
       })
       .select("*")
       .single();
 
     if (error) {
-      alert("오목 시작 실패: " + error.message);
+      alert("오목 초대 생성 실패: " + error.message);
       setGameLoading(false);
       return;
     }
 
+    await supabase.from("messages").insert({
+      user_id: me.id,
+      content: `🎮 오목 초대\\n__OMOK_INVITE__:${data.id}`,
+      read_by: [me.id],
+      room_type: selectedRoom === "group" ? "group" : "dm",
+      recipient_id: selectedRoom === "group" ? null : selectedRoom,
+    });
+
     setCurrentGame(data);
+    setGameOpen(true);
+    setGameLoading(false);
+  }
+
+  async function joinOmokGame(gameId: number) {
+    if (!me || gameLoading) return;
+
+    setGameLoading(true);
+
+    const { data, error } = await supabase
+      .from("games")
+      .select("*")
+      .eq("id", gameId)
+      .single();
+
+    if (error || !data) {
+      alert("오목 게임을 찾을 수 없어.");
+      setGameLoading(false);
+      return;
+    }
+
+    const game = data as OmokGame;
+
+    if (!game.player_black) {
+      await supabase
+        .from("games")
+        .update({
+          player_black: me.id,
+          status: game.player_white ? "playing" : "waiting",
+        })
+        .eq("id", game.id);
+    } else if (!game.player_white && game.player_black !== me.id) {
+      await supabase
+        .from("games")
+        .update({
+          player_white: me.id,
+          status: "playing",
+        })
+        .eq("id", game.id);
+    }
+
+    const { data: updated } = await supabase
+      .from("games")
+      .select("*")
+      .eq("id", gameId)
+      .single();
+
+    setCurrentGame(updated ?? game);
     setGameOpen(true);
     setGameLoading(false);
   }
@@ -1456,21 +1500,21 @@ export default function Home() {
       .eq("id", currentGame.id);
 
     setCurrentGame(null);
-
-    setTimeout(() => {
-      startOrJoinOmokGame();
-    }, 100);
+    setGameOpen(false);
   }
 
   async function makeOmokMove(row: number, col: number) {
     if (!me || !currentGame) return;
-    if (currentGame.status !== "playing") return;
+    if (currentGame.status !== "playing") {
+      alert("아직 상대가 참여하지 않았어.");
+      return;
+    }
     if (currentGame.winner) return;
 
     const myStone = getStoneColor(currentGame, me.id);
 
     if (!myStone) {
-      alert("참가자가 2명까지 가능해. 관전만 할 수 있어.");
+      alert("참가자는 2명까지 가능해. 관전만 할 수 있어.");
       return;
     }
 
@@ -1523,6 +1567,40 @@ export default function Home() {
     await loadCurrentGame();
   }
 
+  function renderOmokInvite(message: Message) {
+    const match = message.content.match(/__OMOK_INVITE__:(\\d+)/);
+    if (!match) return null;
+
+    const gameId = Number(match[1]);
+
+    return (
+      <div className="rounded-2xl border border-indigo-100 bg-white p-4 text-slate-900 shadow-sm">
+        <p className="mb-1 text-sm font-bold">🎮 오목 초대</p>
+        <p className="mb-3 text-xs text-slate-500">
+          {userMap.get(message.user_id)?.display_name ?? "누군가"}님이 오목을 시작했어.
+        </p>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => joinOmokGame(gameId)}
+            className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700"
+          >
+            참여하기
+          </button>
+
+          <button
+            type="button"
+            onClick={() => joinOmokGame(gameId)}
+            className="rounded-xl border border-indigo-100 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-indigo-50"
+          >
+            관전하기
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   function renderOmokGame() {
     if (!gameOpen) return null;
 
@@ -1545,36 +1623,30 @@ export default function Home() {
                 흑: {blackName} · 백: {whiteName}
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                {currentGame?.winner
+                {!currentGame
+                  ? "초대 메시지에서 참여할 수 있어."
+                  : currentGame.status === "waiting"
+                  ? "상대 참여 대기 중"
+                  : currentGame.winner
                   ? `${getWinnerName(currentGame)} 승리`
-                  : currentGame
-                  ? currentGame.turn === "black"
-                    ? "흑돌 차례"
-                    : "백돌 차례"
-                  : "게임을 시작해줘"}
-                {myStone && !currentGame?.winner
+                  : currentGame.turn === "black"
+                  ? "흑돌 차례"
+                  : "백돌 차례"}
+                {myStone && currentGame?.status === "playing" && !currentGame?.winner
                   ? ` · 나는 ${myStone === "black" ? "흑돌" : "백돌"}`
                   : ""}
+                {!myStone && currentGame ? " · 관전 중" : ""}
               </p>
             </div>
 
             <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={startOrJoinOmokGame}
-                disabled={gameLoading}
-                className="rounded-xl bg-indigo-600 px-3 py-2 text-sm text-white disabled:opacity-50"
-              >
-                {currentGame ? "참가/새로고침" : "시작"}
-              </button>
-
               {currentGame && (
                 <button
                   type="button"
                   onClick={resetOmokGame}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
                 >
-                  새판
+                  종료
                 </button>
               )}
 
@@ -1615,12 +1687,6 @@ export default function Home() {
               )}
             </div>
           </div>
-
-          {!currentGame && (
-            <p className="mt-4 text-center text-sm text-slate-500">
-              시작 버튼을 누르면 이 채팅방에 오목판이 생겨.
-            </p>
-          )}
         </div>
       </div>
     );
@@ -1909,13 +1975,11 @@ export default function Home() {
             )}
 
             <button
-              onClick={() => {
-                setGameOpen(true);
-                loadCurrentGame();
-              }}
-              className="text-sm border border-indigo-100 bg-white hover:bg-indigo-50 rounded-xl px-3 py-2 transition"
+              onClick={createOmokInvite}
+              disabled={gameLoading}
+              className="text-sm border border-indigo-100 bg-white hover:bg-indigo-50 rounded-xl px-3 py-2 transition disabled:opacity-50"
             >
-              오목하기
+              오목 초대
             </button>
 
             <button
