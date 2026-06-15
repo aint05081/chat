@@ -213,6 +213,8 @@ export default function Home() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef(true);
   const notificationOnRef = useRef(notificationOn);
+  const appleDraggingRef = useRef(false);
+  const selectedAppleCellsRef = useRef<string[]>([]);
 
   const isAdmin = me?.role === "admin";
 
@@ -2007,17 +2009,50 @@ export default function Home() {
     setAppleGameOpen(false);
   }
 
-  function toggleAppleCell(cellId: string) {
-    setSelectedAppleCells((prev) => {
-      if (prev.includes(cellId)) {
-        return prev.filter((id) => id !== cellId);
-      }
-
-      return [...prev, cellId];
-    });
+  function setAppleSelection(next: string[]) {
+    selectedAppleCellsRef.current = next;
+    setSelectedAppleCells(next);
   }
 
-  async function submitAppleSelection() {
+  function startAppleDrag(cellId: string) {
+    appleDraggingRef.current = true;
+    setAppleSelection([cellId]);
+  }
+
+  function enterAppleDrag(cellId: string) {
+    if (!appleDraggingRef.current) return;
+
+    const current = selectedAppleCellsRef.current;
+
+    if (current.includes(cellId)) return;
+
+    setAppleSelection([...current, cellId]);
+  }
+
+  async function endAppleDrag() {
+    if (!appleDraggingRef.current) return;
+
+    appleDraggingRef.current = false;
+
+    const selected = selectedAppleCellsRef.current;
+
+    if (selected.length === 0) return;
+
+    await submitAppleSelection(selected);
+  }
+
+  function toggleAppleCell(cellId: string) {
+    const current = selectedAppleCellsRef.current;
+
+    if (current.includes(cellId)) {
+      setAppleSelection(current.filter((id) => id !== cellId));
+      return;
+    }
+
+    setAppleSelection([...current, cellId]);
+  }
+
+  async function submitAppleSelection(selectionOverride?: string[]) {
     if (!me || !currentAppleGame) return;
 
     if (currentAppleGame.status !== "playing") {
@@ -2045,7 +2080,7 @@ export default function Home() {
 
     for (const row of board) {
       for (const cell of row) {
-        if (selectedAppleCells.includes(cell.id) && !cell.removed) {
+        if ((selectionOverride ?? selectedAppleCells).includes(cell.id) && !cell.removed) {
           selectedCells.push(cell);
         }
       }
@@ -2062,7 +2097,7 @@ export default function Home() {
 
     for (const row of board) {
       for (const cell of row) {
-        if (selectedAppleCells.includes(cell.id)) {
+        if ((selectionOverride ?? selectedAppleCells).includes(cell.id)) {
           cell.removed = true;
           cell.removed_by = me.id;
         }
@@ -2086,7 +2121,7 @@ export default function Home() {
       return;
     }
 
-    setSelectedAppleCells([]);
+    setAppleSelection([]);
     await loadCurrentAppleGame();
   }
 
@@ -2263,6 +2298,10 @@ export default function Home() {
                 style={{
                   backgroundColor: `rgba(254,226,226,${opacity / 100})`,
                 }}
+                onPointerUp={endAppleDrag}
+                onPointerLeave={() => {
+                  appleDraggingRef.current = false;
+                }}
               >
                 <div
                   className="grid w-fit gap-1"
@@ -2279,8 +2318,16 @@ export default function Home() {
                           key={cell.id}
                           type="button"
                           disabled={!!cell.removed || game.status !== "playing"}
-                          onClick={() => toggleAppleCell(cell.id)}
-                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-bold transition sm:h-10 sm:w-10 ${
+                          onPointerDown={(e) => {
+                            e.preventDefault();
+                            startAppleDrag(cell.id);
+                          }}
+                          onPointerEnter={() => enterAppleDrag(cell.id)}
+                          onPointerUp={endAppleDrag}
+                          onPointerCancel={() => {
+                            appleDraggingRef.current = false;
+                          }}
+                          className={`flex h-8 w-8 shrink-0 touch-none select-none items-center justify-center rounded-full border text-sm font-bold transition sm:h-10 sm:w-10 ${
                             cell.removed
                               ? "border-transparent bg-transparent text-transparent"
                               : selected
@@ -2297,26 +2344,19 @@ export default function Home() {
               </div>
 
               <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={submitAppleSelection}
-                  disabled={
-                    game.status !== "playing" ||
-                    !isParticipant ||
-                    selectedAppleCells.length === 0
-                  }
-                  className="rounded-xl bg-red-500 px-4 py-2 text-sm text-white disabled:opacity-40"
-                >
-                  선택 제출
-                </button>
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">
+                  사과를 드래그해서 합이 10이 되면 자동 제출돼.
+                </p>
 
-                <button
-                  type="button"
-                  onClick={() => setSelectedAppleCells([])}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
-                >
-                  선택 취소
-                </button>
+                {selectedAppleCells.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setAppleSelection([])}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
+                  >
+                    선택 취소
+                  </button>
+                )}
 
                 {!isParticipant && (
                   <p className="text-xs text-slate-400">
@@ -2614,27 +2654,20 @@ export default function Home() {
             )}
 
             <button
-  onClick={createOmokInvite}
-  disabled={gameLoading}
-  className="text-sm border border-indigo-100 bg-white hover:bg-indigo-50 rounded-xl px-3 py-2 transition disabled:opacity-50"
->
-  오목 초대
-</button>
+              onClick={createOmokInvite}
+              disabled={gameLoading}
+              className="text-sm border border-indigo-100 bg-white hover:bg-indigo-50 rounded-xl px-3 py-2 transition disabled:opacity-50"
+            >
+              오목 초대
+            </button>
 
-<button
-  onClick={createAppleGameInvite}
-  disabled={appleGameLoading}
-  className="text-sm border border-red-100 bg-white hover:bg-red-50 rounded-xl px-3 py-2 transition disabled:opacity-50"
->
-  사과게임 초대
-</button>
+            <button
+              onClick={() => setBossMode(true)}
+              className="text-sm border border-indigo-100 bg-white hover:bg-indigo-50 rounded-xl px-3 py-2 transition"
+            >
+              업무 현황
+            </button>
 
-<button
-  onClick={() => setBossMode(true)}
-  className="text-sm border border-indigo-100 bg-white hover:bg-indigo-50 rounded-xl px-3 py-2 transition"
->
-  업무 현황
-</button>
             <button
               onClick={logout}
               className="text-sm text-slate-500 hover:text-slate-900"
