@@ -2161,7 +2161,9 @@ export default function Home() {
                 {!game
                   ? "초대 대기"
                   : game.status === "waiting"
-                  ? "참여자 대기 중"
+                  ? isCreator
+                    ? "참여자 대기 중 · 준비되면 시작 버튼을 눌러줘"
+                    : "참여자 대기 중"
                   : game.status === "playing"
                   ? `${timeLeft}초 남음`
                   : "종료"}
@@ -2169,6 +2171,28 @@ export default function Home() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              {!game && (
+                <button
+                  type="button"
+                  onClick={createAppleGameInvite}
+                  disabled={appleGameLoading}
+                  className="rounded-xl bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600 disabled:opacity-50"
+                >
+                  초대 만들기
+                </button>
+              )}
+
+              {game?.status === "waiting" && !isParticipant && (
+                <button
+                  type="button"
+                  onClick={() => joinAppleGame(game.id)}
+                  disabled={appleGameLoading}
+                  className="rounded-xl bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600 disabled:opacity-50"
+                >
+                  참여하기
+                </button>
+              )}
+
               {game?.status === "waiting" && isCreator && (
                 <button
                   type="button"
@@ -2188,6 +2212,14 @@ export default function Home() {
                   결과 남기기
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={loadCurrentAppleGame}
+                className="rounded-xl border border-red-100 bg-white px-3 py-2 text-sm text-red-500 hover:bg-red-50"
+              >
+                새로고침
+              </button>
 
               <button
                 type="button"
