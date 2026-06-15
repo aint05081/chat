@@ -2662,6 +2662,14 @@ export default function Home() {
             </button>
 
             <button
+              onClick={createAppleGameInvite}
+              disabled={appleGameLoading}
+              className="text-sm border border-red-100 bg-white hover:bg-red-50 rounded-xl px-3 py-2 transition disabled:opacity-50"
+            >
+              사과게임 초대
+            </button>
+
+            <button
               onClick={() => setBossMode(true)}
               className="text-sm border border-indigo-100 bg-white hover:bg-indigo-50 rounded-xl px-3 py-2 transition"
             >
