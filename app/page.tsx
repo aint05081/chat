@@ -42,6 +42,26 @@ type OmokGame = {
   created_at?: string;
 };
 
+type AppleCell = {
+  id: string;
+  value: number;
+  removed?: boolean;
+  removed_by?: number | null;
+};
+
+type AppleGame = {
+  id: number;
+  room_key: string;
+  creator_id: number;
+  participants: number[];
+  board: AppleCell[][];
+  scores: Record<string, number>;
+  status: "waiting" | "playing" | "finished";
+  started_at?: string | null;
+  ends_at?: string | null;
+  created_at?: string;
+};
+
 type Message = {
   id: number;
   user_id: number;
@@ -59,6 +79,9 @@ type Message = {
 
 const PAGE_SIZE = 50;
 const OMOK_SIZE = 15;
+const APPLE_ROWS = 10;
+const APPLE_COLS = 17;
+const APPLE_SECONDS = 60;
 
 const DEFAULT_REACTIONS = [
   "👍",
@@ -159,6 +182,14 @@ export default function Home() {
   const [gameOpen, setGameOpen] = useState(false);
   const [currentGame, setCurrentGame] = useState<OmokGame | null>(null);
   const [gameLoading, setGameLoading] = useState(false);
+
+  const [appleGameOpen, setAppleGameOpen] = useState(false);
+  const [currentAppleGame, setCurrentAppleGame] = useState<AppleGame | null>(
+    null
+  );
+  const [appleGameLoading, setAppleGameLoading] = useState(false);
+  const [selectedAppleCells, setSelectedAppleCells] = useState<string[]>([]);
+  const [appleNow, setAppleNow] = useState(Date.now());
 
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -402,6 +433,17 @@ export default function Home() {
       )
       .subscribe();
 
+    const appleGamesChannel = supabase
+      .channel("apple-games-channel")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "apple_games" },
+        async () => {
+          await loadCurrentAppleGame();
+        }
+      )
+      .subscribe();
+
     const usersChannel = supabase
       .channel("users-channel")
       .on(
@@ -420,9 +462,23 @@ export default function Home() {
       supabase.removeChannel(reactionsChannel);
       supabase.removeChannel(emojiChannel);
       supabase.removeChannel(gamesChannel);
+      supabase.removeChannel(appleGamesChannel);
       supabase.removeChannel(usersChannel);
     };
   }, [me?.id, selectedRoom]);
+
+  useEffect(() => {
+    if (!me) return;
+    loadCurrentAppleGame();
+  }, [selectedRoom, me?.id]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setAppleNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!me?.id) return;
@@ -1739,6 +1795,512 @@ export default function Home() {
     );
   }
 
+  function makeAppleBoard() {
+    return Array.from({ length: APPLE_ROWS }, (_, row) =>
+      Array.from({ length: APPLE_COLS }, (_, col) => ({
+        id: `${row}-${col}`,
+        value: Math.floor(Math.random() * 9) + 1,
+        removed: false,
+        removed_by: null,
+      }))
+    );
+  }
+
+  function getAppleTimeLeft(game: AppleGame | null) {
+    if (!game?.ends_at) return APPLE_SECONDS;
+
+    return Math.max(
+      0,
+      Math.ceil((new Date(game.ends_at).getTime() - appleNow) / 1000)
+    );
+  }
+
+  function getAppleScore(game: AppleGame | null, userId: number) {
+    if (!game) return 0;
+    return Number(game.scores?.[String(userId)] ?? 0);
+  }
+
+  function getAppleRanking(game: AppleGame | null) {
+    if (!game) return [];
+
+    return [...(game.participants ?? [])]
+      .map((userId) => ({
+        userId,
+        name: userMap.get(userId)?.display_name ?? `사용자 ${userId}`,
+        score: getAppleScore(game, userId),
+      }))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  async function loadCurrentAppleGame() {
+    if (!me) return;
+
+    const roomKey = getCurrentRoomKey();
+
+    const { data } = await supabase
+      .from("apple_games")
+      .select("*")
+      .eq("room_key", roomKey)
+      .in("status", ["waiting", "playing"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    setCurrentAppleGame(data ?? null);
+  }
+
+  async function createAppleGameInvite() {
+    if (!me || appleGameLoading) return;
+
+    setAppleGameLoading(true);
+
+    const roomKey = getCurrentRoomKey();
+
+    const { data: existing } = await supabase
+      .from("apple_games")
+      .select("*")
+      .eq("room_key", roomKey)
+      .in("status", ["waiting", "playing"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existing) {
+      setCurrentAppleGame(existing);
+      setAppleGameOpen(true);
+      setAppleGameLoading(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("apple_games")
+      .insert({
+        room_key: roomKey,
+        creator_id: me.id,
+        participants: [me.id],
+        board: makeAppleBoard(),
+        scores: { [String(me.id)]: 0 },
+        status: "waiting",
+        started_at: null,
+        ends_at: null,
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      alert("사과게임 초대 생성 실패: " + error.message);
+      setAppleGameLoading(false);
+      return;
+    }
+
+    await supabase.from("messages").insert({
+      user_id: me.id,
+      content: `🍎 사과게임 초대\n__APPLE_INVITE__:${data.id}`,
+      read_by: [me.id],
+      room_type: selectedRoom === "group" ? "group" : "dm",
+      recipient_id: selectedRoom === "group" ? null : selectedRoom,
+    });
+
+    setCurrentAppleGame(data);
+    setAppleGameOpen(true);
+    setAppleGameLoading(false);
+  }
+
+  async function joinAppleGame(gameId: number) {
+    if (!me || appleGameLoading) return;
+
+    setAppleGameLoading(true);
+
+    const { data, error } = await supabase
+      .from("apple_games")
+      .select("*")
+      .eq("id", gameId)
+      .single();
+
+    if (error || !data) {
+      alert("사과게임을 찾을 수 없어.");
+      setAppleGameLoading(false);
+      return;
+    }
+
+    const game = data as AppleGame;
+    const participants = Array.from(
+      new Set([...(game.participants ?? []), me.id])
+    );
+    const scores = {
+      ...(game.scores ?? {}),
+      [String(me.id)]: Number(game.scores?.[String(me.id)] ?? 0),
+    };
+
+    await supabase
+      .from("apple_games")
+      .update({ participants, scores })
+      .eq("id", gameId);
+
+    const { data: updated } = await supabase
+      .from("apple_games")
+      .select("*")
+      .eq("id", gameId)
+      .single();
+
+    setCurrentAppleGame(updated ?? game);
+    setAppleGameOpen(true);
+    setAppleGameLoading(false);
+  }
+
+  async function startAppleGame() {
+    if (!me || !currentAppleGame) return;
+
+    if (currentAppleGame.creator_id !== me.id) {
+      alert("초대한 사람만 시작할 수 있어.");
+      return;
+    }
+
+    const now = new Date();
+    const endsAt = new Date(now.getTime() + APPLE_SECONDS * 1000);
+    const scores = { ...(currentAppleGame.scores ?? {}) };
+
+    for (const userId of currentAppleGame.participants ?? []) {
+      scores[String(userId)] = Number(scores[String(userId)] ?? 0);
+    }
+
+    const { error } = await supabase
+      .from("apple_games")
+      .update({
+        status: "playing",
+        started_at: now.toISOString(),
+        ends_at: endsAt.toISOString(),
+        scores,
+      })
+      .eq("id", currentAppleGame.id);
+
+    if (error) {
+      alert("사과게임 시작 실패: " + error.message);
+      return;
+    }
+
+    await loadCurrentAppleGame();
+  }
+
+  async function finishAppleGame(game: AppleGame) {
+    if (!me) return;
+
+    const ranking = getAppleRanking(game);
+    const resultText = ranking
+      .map((item, index) => `${index + 1}위 ${item.name} ${item.score}점`)
+      .join("\n");
+
+    await supabase
+      .from("apple_games")
+      .update({ status: "finished" })
+      .eq("id", game.id);
+
+    await supabase.from("messages").insert({
+      user_id: me.id,
+      content: `🍎 사과게임 종료!\n${resultText || "참여자가 없어."}`,
+      read_by: [me.id],
+      room_type: selectedRoom === "group" ? "group" : "dm",
+      recipient_id: selectedRoom === "group" ? null : selectedRoom,
+    });
+
+    setCurrentAppleGame(null);
+    setAppleGameOpen(false);
+  }
+
+  function toggleAppleCell(cellId: string) {
+    setSelectedAppleCells((prev) => {
+      if (prev.includes(cellId)) {
+        return prev.filter((id) => id !== cellId);
+      }
+
+      return [...prev, cellId];
+    });
+  }
+
+  async function submitAppleSelection() {
+    if (!me || !currentAppleGame) return;
+
+    if (currentAppleGame.status !== "playing") {
+      alert("아직 게임이 시작되지 않았어.");
+      return;
+    }
+
+    if (getAppleTimeLeft(currentAppleGame) <= 0) {
+      await finishAppleGame(currentAppleGame);
+      return;
+    }
+
+    const participants = currentAppleGame.participants ?? [];
+
+    if (!participants.includes(me.id)) {
+      alert("참여하기를 먼저 눌러줘.");
+      return;
+    }
+
+    const board = (currentAppleGame.board ?? []).map((line) =>
+      line.map((cell) => ({ ...cell }))
+    );
+
+    const selectedCells: AppleCell[] = [];
+
+    for (const row of board) {
+      for (const cell of row) {
+        if (selectedAppleCells.includes(cell.id) && !cell.removed) {
+          selectedCells.push(cell);
+        }
+      }
+    }
+
+    const sum = selectedCells.reduce((total, cell) => total + cell.value, 0);
+
+    if (selectedCells.length === 0) return;
+
+    if (sum !== 10) {
+      alert(`합이 ${sum}이야. 합이 10이어야 해.`);
+      return;
+    }
+
+    for (const row of board) {
+      for (const cell of row) {
+        if (selectedAppleCells.includes(cell.id)) {
+          cell.removed = true;
+          cell.removed_by = me.id;
+        }
+      }
+    }
+
+    const scores = {
+      ...(currentAppleGame.scores ?? {}),
+      [String(me.id)]:
+        Number(currentAppleGame.scores?.[String(me.id)] ?? 0) +
+        selectedCells.length,
+    };
+
+    const { error } = await supabase
+      .from("apple_games")
+      .update({ board, scores })
+      .eq("id", currentAppleGame.id);
+
+    if (error) {
+      alert("점수 반영 실패: " + error.message);
+      return;
+    }
+
+    setSelectedAppleCells([]);
+    await loadCurrentAppleGame();
+  }
+
+  function renderAppleInvite(message: Message) {
+    const match = message.content.match(/__APPLE_INVITE__:(\d+)/);
+    if (!match) return null;
+
+    const gameId = Number(match[1]);
+
+    return (
+      <div className="rounded-2xl border border-red-100 bg-white p-4 text-slate-900 shadow-sm">
+        <p className="mb-1 text-sm font-bold">🍎 사과게임 초대</p>
+        <p className="mb-3 text-xs text-slate-500">
+          숫자 사과를 골라 합이 10이 되면 점수를 얻어.
+        </p>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => joinAppleGame(gameId)}
+            className="rounded-xl bg-red-500 px-3 py-2 text-xs font-medium text-white hover:bg-red-600"
+          >
+            참여하기
+          </button>
+
+          <button
+            type="button"
+            onClick={() => joinAppleGame(gameId)}
+            className="rounded-xl border border-red-100 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-red-50"
+          >
+            관전하기
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderAppleGame() {
+    if (!appleGameOpen) return null;
+
+    const game = currentAppleGame;
+    const board = game?.board ?? makeAppleBoard();
+    const timeLeft = getAppleTimeLeft(game);
+    const ranking = getAppleRanking(game);
+    const isCreator = !!game && me?.id === game.creator_id;
+    const isParticipant =
+      !!game && !!me && (game.participants ?? []).includes(me.id);
+
+    return (
+      <div
+        className="fixed inset-0 z-[9999] flex items-start justify-center overflow-y-auto p-2 sm:items-center sm:p-3"
+        style={{
+          backgroundColor: `rgba(0,0,0,${opacity / 500})`,
+        }}
+      >
+        <div
+          className="my-2 max-h-[96dvh] w-full max-w-[820px] overflow-y-auto rounded-3xl border border-red-100 p-3 shadow-2xl sm:my-0 sm:p-4"
+          style={{
+            backgroundColor: `rgba(255,255,255,${opacity / 100})`,
+          }}
+        >
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">
+                🍎 사과게임
+              </h2>
+              <p className="text-xs text-slate-500">
+                합이 10이 되도록 사과를 고르고 점수 얻기
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                상태:{" "}
+                {!game
+                  ? "초대 대기"
+                  : game.status === "waiting"
+                  ? "참여자 대기 중"
+                  : game.status === "playing"
+                  ? `${timeLeft}초 남음`
+                  : "종료"}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {game?.status === "waiting" && isCreator && (
+                <button
+                  type="button"
+                  onClick={startAppleGame}
+                  className="rounded-xl bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
+                >
+                  시작
+                </button>
+              )}
+
+              {game?.status === "playing" && timeLeft <= 0 && (
+                <button
+                  type="button"
+                  onClick={() => finishAppleGame(game)}
+                  className="rounded-xl bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
+                >
+                  결과 남기기
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setAppleGameOpen(false)}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {ranking.length === 0 && (
+              <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+                아직 참여자가 없어.
+              </div>
+            )}
+
+            {ranking.map((item, index) => (
+              <div
+                key={item.userId}
+                className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2"
+              >
+                <p className="text-xs text-red-500">{index + 1}위</p>
+                <p className="truncate text-sm font-semibold text-slate-900">
+                  {item.name}
+                </p>
+                <p className="text-xs text-slate-500">{item.score}점</p>
+              </div>
+            ))}
+          </div>
+
+          {!game && (
+            <p className="text-center text-sm text-slate-500">
+              채팅방의 초대 메시지에서 참여하거나 새 초대를 만들어줘.
+            </p>
+          )}
+
+          {game && (
+            <>
+              <div
+                className="mx-auto max-w-full overflow-x-auto rounded-2xl p-2 shadow-inner sm:p-3"
+                style={{
+                  backgroundColor: `rgba(254,226,226,${opacity / 100})`,
+                }}
+              >
+                <div
+                  className="grid w-fit gap-1"
+                  style={{
+                    gridTemplateColumns: `repeat(${APPLE_COLS}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {board.map((line) =>
+                    line.map((cell) => {
+                      const selected = selectedAppleCells.includes(cell.id);
+
+                      return (
+                        <button
+                          key={cell.id}
+                          type="button"
+                          disabled={!!cell.removed || game.status !== "playing"}
+                          onClick={() => toggleAppleCell(cell.id)}
+                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-bold transition sm:h-10 sm:w-10 ${
+                            cell.removed
+                              ? "border-transparent bg-transparent text-transparent"
+                              : selected
+                              ? "border-red-500 bg-red-500 text-white"
+                              : "border-red-200 bg-white text-red-600 hover:bg-red-50"
+                          }`}
+                        >
+                          {cell.removed ? "" : cell.value}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={submitAppleSelection}
+                  disabled={
+                    game.status !== "playing" ||
+                    !isParticipant ||
+                    selectedAppleCells.length === 0
+                  }
+                  className="rounded-xl bg-red-500 px-4 py-2 text-sm text-white disabled:opacity-40"
+                >
+                  선택 제출
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedAppleCells([])}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
+                >
+                  선택 취소
+                </button>
+
+                {!isParticipant && (
+                  <p className="text-xs text-slate-400">
+                    관전 중이야. 점수를 얻으려면 참여하기를 눌러야 해.
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   function renderMedia(message: Message) {
     if (!message.media_url) return null;
 
@@ -2306,9 +2868,12 @@ export default function Home() {
                             >
                               {renderReplyPreview(m, mine)}
                               {renderOmokInvite(m) ||
-                                (m.content && !m.content.includes("__OMOK_INVITE__") && (
-                                  <div>{renderTextWithLinksAndEmojis(m.content, customEmojis)}</div>
-                                ))}
+                                renderAppleInvite(m) ||
+                                (m.content &&
+                                  !m.content.includes("__OMOK_INVITE__") &&
+                                  !m.content.includes("__APPLE_INVITE__") && (
+                                    <div>{renderTextWithLinksAndEmojis(m.content, customEmojis)}</div>
+                                  ))}
                               {renderMedia(m)}
                             </div>
 
@@ -2642,6 +3207,7 @@ export default function Home() {
       </div>
 
       {renderOmokGame()}
+      {renderAppleGame()}
 
       {opacity === 0 && (
         <button
