@@ -2161,9 +2161,7 @@ export default function Home() {
                 {!game
                   ? "초대 대기"
                   : game.status === "waiting"
-                  ? isCreator
-                    ? "참여자 대기 중 · 준비되면 시작 버튼을 눌러줘"
-                    : "참여자 대기 중"
+                  ? "참여자 대기 중"
                   : game.status === "playing"
                   ? `${timeLeft}초 남음`
                   : "종료"}
